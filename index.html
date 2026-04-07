@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BLE Player</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:        #0a0a0f;
+      --bg2:       #12121a;
+      --bg3:       #1a1a26;
+      --border:    #2a2a3d;
+      --accent:    #7c6aff;
+      --accent2:   #ff6ab0;
+      --text:      #e8e8f0;
+      --text-dim:  #6a6a8a;
+      --success:   #4fffb0;
+      --warning:   #ffb74d;
+      --sidebar-w: 260px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Syne', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── トップバー ── */
+    #topbar {
+      height: 48px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 16px;
+      flex-shrink: 0;
+      z-index: 100;
+    }
+
+    #topbar .logo {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .2em;
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+
+    #topbar .ble-status {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+      animation: pulse 2s infinite;
+    }
+    .dot.disconnected { background: var(--text-dim); box-shadow: none; animation: none; }
+
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: .4; }
+    }
+
+    /* ── メインレイアウト ── */
+    #app {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── サイドバー ── */
+    #sidebar {
+      width: var(--sidebar-w);
+      background: var(--bg2);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+
+    #sidebar .search-wrap {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #sidebar .search-wrap input {
+      width: 100%;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text);
+      outline: none;
+    }
+    #sidebar .search-wrap input::placeholder { color: var(--text-dim); }
+    #sidebar .search-wrap input:focus { border-color: var(--accent); }
+
+    .sidebar-section {
+      padding: 10px 12px 4px;
+      font-size: 9px;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      font-weight: 600;
+    }
+
+    .filter-chips {
+      padding: 4px 12px 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .chip {
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .chip:hover, .chip.active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(124,106,255,.08);
+    }
+
+    .library-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+    .library-list::-webkit-scrollbar { width: 4px; }
+    .library-list::-webkit-scrollbar-track { background: transparent; }
+    .library-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .work-item {
+      padding: 10px 14px;
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: all .15s;
+    }
+    .work-item:hover { background: var(--bg3); }
+    .work-item.active {
+      border-left-color: var(--accent);
+      background: rgba(124,106,255,.08);
+    }
+
+    .work-title {
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .work-meta {
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-dim);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .work-rj {
+      font-size: 9px;
+      color: var(--accent);
+      margin-top: 2px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .sidebar-add {
+      padding: 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    .btn-outline {
+      width: 100%;
+      padding: 8px;
+      background: transparent;
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      color: var(--text-dim);
+      font-family: 'Syne', sans-serif;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all .15s;
+      letter-spacing: .05em;
+    }
+    .btn-outline:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* ── メインエリア ── */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* トラックリスト */
+    #tracklist {
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+    }
+
+    .work-header {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .work-header h2 {
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .work-header .rj {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--accent);
+    }
+    .work-header .circle {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-left: auto;
+    }
+
+    .tracks {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+    .tracks::-webkit-scrollbar { height: 3px; }
+    .tracks::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .track {
+      flex-shrink: 0;
+      padding: 7px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all .15s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg3);
+    }
+    .track:hover { border-color: var(--accent); }
+    .track.active {
+      border-color: var(--accent);
+      background: rgba(124,106,255,.15);
+      color: var(--accent);
+    }
+    .track .csv-badge {
+      font-size: 9px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: rgba(79,255,176,.15);
+      color: var(--success);
+    }
+    .track .csv-badge.missing {
+      background: rgba(255,183,77,.1);
+      color: var(--warning);
+    }
+
+    /* プレイヤーエリア */
+    #player-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #video-wrap {
+      flex: 1;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #video-wrap video {
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    .no-media {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-dim);
+    }
+    .no-media .icon {
+      font-size: 48px;
+      opacity: .3;
+    }
+    .no-media p {
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: .1em;
+    }
+
+    /* 全画面ボタン */
+    .fullscreen-btn {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      background: rgba(0,0,0,.5);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-dim);
+      padding: 6px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: 'JetBrains Mono', monospace;
+      transition: all .15s;
+    }
+    .fullscreen-btn:hover { color: var(--text); border-color: var(--text-dim); }
+
+    /* コントロールバー */
+    #controls {
+      background: var(--bg2);
+      border-top: 1px solid var(--border);
+      padding: 10px 20px 12px;
+      flex-shrink: 0;
+    }
+
+    .time-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .time-display {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+
+    .seekbar {
+      flex: 1;
+      height: 4px;
+      background: var(--bg3);
+      border-radius: 2px;
+      position: relative;
+      cursor: pointer;
+    }
+    .seekbar-fill {
+      height: 100%;
+      width: 35%;
+      background: var(--accent);
+      border-radius: 2px;
+      position: relative;
+    }
+    .seekbar-fill::after {
+      content: '';
+      position: absolute;
+      right: -5px;
+      top: -4px;
+      width: 12px;
+      height: 12px;
+      background: var(--accent);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--accent);
+    }
+
+    .btn-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .play-btn {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      color: #fff;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all .15s;
+      flex-shrink: 0;
+    }
+    .play-btn:hover { background: #9d8fff; box-shadow: 0 0 16px rgba(124,106,255,.5); }
+
+    .icon-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 4px;
+      transition: all .15s;
+    }
+    .icon-btn:hover { color: var(--text); background: var(--bg3); }
+
+    .manual-slider-wrap {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .manual-slider-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .manual-slider {
+      -webkit-appearance: none;
+      width: 120px;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--bg3);
+      outline: none;
+      cursor: pointer;
+    }
+    .manual-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--accent2);
+      box-shadow: 0 0 8px var(--accent2);
+      cursor: pointer;
+    }
+    .manual-value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--accent2);
+      width: 28px;
+      text-align: right;
+    }
+
+    /* タイムライン */
+    #timeline {
+      height: 72px;
+      background: var(--bg2);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .tl-label {
+      position: absolute;
+      top: 6px;
+      left: 12px;
+      font-size: 9px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .tl-track {
+      position: absolute;
+      top: 26px;
+      left: 12px;
+      right: 12px;
+      height: 24px;
+      background: var(--bg3);
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      overflow: visible;
+    }
+
+    .tl-playhead {
+      position: absolute;
+      top: -6px;
+      bottom: -6px;
+      width: 2px;
+      background: var(--accent);
+      left: 35%;
+      box-shadow: 0 0 8px var(--accent);
+    }
+    .tl-playhead::before {
+      content: '';
+      position: absolute;
+      top: -1px;
+      left: -4px;
+      width: 10px;
+      height: 10px;
+      background: var(--accent);
+      clip-path: polygon(50% 0%, 0% 40%, 100% 40%);
+    }
+
+    /* タイムラインマーカー */
+    .tl-marker {
+      position: absolute;
+      top: 2px;
+      bottom: 2px;
+      width: 6px;
+      border-radius: 2px;
+      transform: translateX(-50%);
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .tl-marker:hover { opacity: .7; }
+    .tl-marker.dir0 { background: var(--accent); box-shadow: 0 0 6px rgba(124,106,255,.6); }
+    .tl-marker.dir1 { background: var(--accent2); box-shadow: 0 0 6px rgba(255,106,176,.6); }
+
+    .tl-time-marks {
+      position: absolute;
+      bottom: 4px;
+      left: 12px;
+      right: 12px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .tl-time-mark {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      color: var(--text-dim);
+    }
+
+    /* モードバッジ */
+    .mode-badge {
+      position: absolute;
+      top: 6px;
+      right: 12px;
+      font-size: 9px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 2px 7px;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .mode-badge:hover { border-color: var(--accent); color: var(--accent); }
+    .mode-badge.active { border-color: var(--success); color: var(--success); background: rgba(79,255,176,.08); }
+
+    /* 全画面モード */
+    body.fullscreen #sidebar,
+    body.fullscreen #topbar,
+    body.fullscreen #tracklist,
+    body.fullscreen #controls,
+    body.fullscreen #timeline { display: none; }
+
+    body.fullscreen #main { background: #000; }
+    body.fullscreen #video-wrap { flex: 1; }
+
+    .fullscreen-hint {
+      position: absolute;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: rgba(255,255,255,.3);
+      letter-spacing: .1em;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .3s;
+    }
+    body.fullscreen .fullscreen-hint { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <!-- トップバー -->
+  <div id="topbar">
+    <span class="logo">BLE Player</span>
+    <div class="ble-status">
+      <div class="dot" id="bleDot"></div>
+      <span id="bleLabel">UFO SA 接続済</span>
+    </div>
+  </div>
+
+  <div id="app">
+
+    <!-- サイドバー -->
+    <div id="sidebar">
+      <div class="search-wrap">
+        <input type="text" placeholder="作品名・サークル・声優で検索…">
+      </div>
+
+      <div class="sidebar-section">フィルター</div>
+      <div class="filter-chips">
+        <div class="chip active">すべて</div>
+        <div class="chip">★ お気に入り</div>
+        <div class="chip">最近追加</div>
+      </div>
+
+      <div class="sidebar-section">ライブラリ</div>
+      <div class="library-list">
+        <div class="work-item active">
+          <div class="work-title">甘々ささやきASMR</div>
+          <div class="work-meta">サークル天使声／鈴木あお</div>
+          <div class="work-rj">RJ012345</div>
+        </div>
+        <div class="work-item">
+          <div class="work-title">密着添い寝ボイス vol.2</div>
+          <div class="work-meta">SoftWhisper／水瀬みく</div>
+          <div class="work-rj">RJ023456</div>
+        </div>
+        <div class="work-item">
+          <div class="work-title">催眠音声 深夜の彼女</div>
+          <div class="work-meta">夢想工房／花咲りな</div>
+          <div class="work-rj">RJ034567</div>
+        </div>
+        <div class="work-item">
+          <div class="work-title">耳かきと甘い時間</div>
+          <div class="work-meta">綿雲スタジオ／桜井ことね</div>
+          <div class="work-rj">RJ045678</div>
+        </div>
+        <div class="work-item">
+          <div class="work-title">ヤンデレ彼女の独占欲</div>
+          <div class="work-meta">狂愛制作所／黒宮しおり</div>
+          <div class="work-rj">RJ056789</div>
+        </div>
+      </div>
+
+      <div class="sidebar-add">
+        <button class="btn-outline">＋ フォルダを追加</button>
+      </div>
+    </div>
+
+    <!-- メインエリア -->
+    <div id="main">
+
+      <!-- トラックリスト -->
+      <div id="tracklist">
+        <div class="work-header">
+          <h2>甘々ささやきASMR</h2>
+          <span class="rj">RJ012345</span>
+          <span class="circle">サークル天使声／鈴木あお</span>
+        </div>
+        <div class="tracks">
+          <div class="track active">
+            <span>01. オープニング</span>
+            <span class="csv-badge">CSV</span>
+          </div>
+          <div class="track">
+            <span>02. 耳かき</span>
+            <span class="csv-badge">CSV</span>
+          </div>
+          <div class="track">
+            <span>03. 添い寝</span>
+            <span class="csv-badge missing">未割当</span>
+          </div>
+          <div class="track">
+            <span>04. おやすみ</span>
+            <span class="csv-badge">CSV</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- プレイヤー -->
+      <div id="player-area">
+        <div id="video-wrap">
+          <div class="no-media">
+            <div class="icon">▶</div>
+            <p>トラックを選択してください</p>
+          </div>
+          <button class="fullscreen-btn" onclick="toggleFullscreen()">⛶ 全画面</button>
+          <div class="fullscreen-hint">クリックで UI を表示</div>
+        </div>
+
+        <!-- コントロール -->
+        <div id="controls">
+          <div class="time-row">
+            <span class="time-display">00:00</span>
+            <div class="seekbar">
+              <div class="seekbar-fill"></div>
+            </div>
+            <span class="time-display">03:45</span>
+          </div>
+          <div class="btn-row">
+            <button class="icon-btn" title="前のトラック">⏮</button>
+            <button class="play-btn">▶</button>
+            <button class="icon-btn" title="次のトラック">⏭</button>
+            <button class="icon-btn" title="連続再生">↻</button>
+
+            <div class="manual-slider-wrap">
+              <span class="manual-slider-label">手動強度</span>
+              <input type="range" class="manual-slider" min="0" max="100" value="0"
+                oninput="document.querySelector('.manual-value').textContent = this.value">
+              <span class="manual-value">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- タイムライン -->
+        <div id="timeline">
+          <span class="tl-label">タイムライン</span>
+          <span class="mode-badge active" id="modeBtn" onclick="toggleMode()">CSV モード</span>
+
+          <div class="tl-track">
+            <div class="tl-playhead"></div>
+            <!-- サンプルマーカー -->
+            <div class="tl-marker dir0" style="left:8%"  title="向き:0 強さ:30"></div>
+            <div class="tl-marker dir1" style="left:18%" title="向き:1 強さ:60"></div>
+            <div class="tl-marker dir0" style="left:28%" title="向き:0 強さ:80"></div>
+            <div class="tl-marker dir1" style="left:35%" title="向き:1 強さ:50"></div>
+            <div class="tl-marker dir0" style="left:50%" title="向き:0 強さ:40"></div>
+            <div class="tl-marker dir1" style="left:65%" title="向き:1 強さ:70"></div>
+            <div class="tl-marker dir0" style="left:80%" title="向き:0 強さ:20"></div>
+          </div>
+
+          <div class="tl-time-marks">
+            <span class="tl-time-mark">0:00</span>
+            <span class="tl-time-mark">1:00</span>
+            <span class="tl-time-mark">2:00</span>
+            <span class="tl-time-mark">3:00</span>
+            <span class="tl-time-mark">3:45</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    function toggleFullscreen() {
+      document.body.classList.toggle('fullscreen');
+    }
+
+    // 全画面中クリックでUI一時表示
+    document.getElementById('video-wrap').addEventListener('click', (e) => {
+      if (!document.body.classList.contains('fullscreen')) return;
+      document.body.classList.remove('fullscreen');
+    });
+
+    function toggleMode() {
+      const btn = document.getElementById('modeBtn');
+      const modes = ['CSV モード', 'ランダム', '波形連動'];
+      let idx = modes.indexOf(btn.textContent.trim());
+      idx = (idx + 1) % modes.length;
+      btn.textContent = modes[idx];
+      btn.classList.toggle('active', idx === 0);
+    }
+
+    // スライダーの値表示
+    document.querySelector('.manual-slider').addEventListener('input', function() {
+      document.querySelector('.manual-value').textContent = this.value;
+    });
+  </script>
+</body>
+</html>
