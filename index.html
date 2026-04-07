@@ -749,9 +749,14 @@
   </div>
 
   <script>
-    function toggleFullscreen() {
-      document.body.classList.toggle('fullscreen');
-    }
+   function toggleFullscreen() {
+  const area = document.getElementById('player-area');
+  if (!document.fullscreenElement) {
+    area.requestFullscreen();
+  } else {
+    document.exitFullscreen();
+  }
+}
 
     // 全画面中クリックでUI一時表示
     document.getElementById('video-wrap').addEventListener('click', (e) => {
