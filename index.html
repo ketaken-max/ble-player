@@ -591,9 +591,141 @@
       transition: opacity .3s;
     }
     body.fullscreen .fullscreen-hint { opacity: 1; }
+
+    /* ── BLE接続画面 ── */
+    #connect-screen {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+      gap: 0;
+    }
+
+    #connect-screen .connect-logo {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .3em;
+      color: var(--accent);
+      text-transform: uppercase;
+      margin-bottom: 48px;
+    }
+
+    #connect-screen .connect-ring {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      margin-bottom: 32px;
+    }
+
+    #connect-screen .connect-ring::before {
+      content: '';
+      position: absolute;
+      inset: -8px;
+      border-radius: 50%;
+      border: 1px solid transparent;
+      border-top-color: var(--accent);
+      animation: spin 1.5s linear infinite;
+      opacity: 0;
+    }
+
+    #connect-screen.connecting .connect-ring::before { opacity: 1; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #connect-screen .connect-icon {
+      font-size: 40px;
+      opacity: .4;
+    }
+
+    #connect-screen h1 {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    #connect-screen .connect-sub {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-bottom: 40px;
+      letter-spacing: .08em;
+    }
+
+    #connect-screen .connect-btn {
+      padding: 12px 32px;
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      cursor: pointer;
+      transition: all .2s;
+      position: relative;
+      overflow: hidden;
+    }
+    #connect-screen .connect-btn:hover {
+      background: #9d8fff;
+      box-shadow: 0 0 24px rgba(124,106,255,.4);
+    }
+    #connect-screen .connect-btn:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    #connect-screen .connect-error {
+      margin-top: 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--accent2);
+      min-height: 16px;
+      text-align: center;
+    }
+
+    #connect-screen .skip-btn {
+      margin-top: 24px;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      cursor: pointer;
+      text-decoration: underline;
+      letter-spacing: .05em;
+    }
+    #connect-screen .skip-btn:hover { color: var(--text); }
+
+    /* 接続画面が非表示のとき */
+    #connect-screen.hidden { display: none; }
   </style>
 </head>
 <body>
+
+  <!-- BLE接続画面 -->
+  <div id="connect-screen">
+    <div class="connect-logo">BLE Player</div>
+    <div class="connect-ring">
+      <div class="connect-icon">◎</div>
+    </div>
+    <h1>デバイスに接続</h1>
+    <p class="connect-sub">UFO SA との Bluetooth 接続を開始します</p>
+    <button class="connect-btn" id="connectBtn" onclick="startConnect()">
+      UFO SA に接続する
+    </button>
+    <div class="connect-error" id="connectError"></div>
+    <button class="skip-btn" onclick="skipConnect()">接続せずに続ける（テスト用）</button>
+  </div>
 
   <!-- トップバー -->
   <div id="topbar">
@@ -749,23 +881,120 @@
   </div>
 
   <script>
-   function toggleFullscreen() {
-  const area = document.getElementById('player-area');
-  if (!document.fullscreenElement) {
-    area.requestFullscreen();
-  } else {
-    document.exitFullscreen();
-  }
-}
+    // ── BLE定数（UFO SA）──
+    const UFO_SERVICE  = '40ee1111-63ec-4b7f-8543-f03753f1d0ba';
+    const UFO_CHAR     = '40ee2222-63ec-4b7f-8543-f03753f1d0ba';
+    const UFO_ID       = 0x02;
 
-    // 全画面中クリックでUI一時表示
-    document.getElementById('video-wrap').addEventListener('click', (e) => {
-      if (!document.body.classList.contains('fullscreen')) return;
-      document.body.classList.remove('fullscreen');
+    let bleDevice = null;
+    let bleChar   = null;
+
+    // ── 接続画面 ──
+    async function startConnect() {
+      const btn   = document.getElementById('connectBtn');
+      const err   = document.getElementById('connectError');
+      const screen = document.getElementById('connect-screen');
+
+      btn.disabled  = true;
+      btn.textContent = '接続中…';
+      err.textContent = '';
+      screen.classList.add('connecting');
+
+      try {
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ name: 'UFOSA' }],
+          optionalServices: [UFO_SERVICE]
+        });
+
+        const server  = await bleDevice.gatt.connect();
+        const service = await server.getPrimaryService(UFO_SERVICE);
+        bleChar        = await service.getCharacteristic(UFO_CHAR);
+
+        // 切断検知
+        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+        // 接続成功 → メイン画面へ
+        enterMain(bleDevice.name || 'UFO SA');
+
+      } catch (e) {
+        screen.classList.remove('connecting');
+        btn.disabled    = false;
+        btn.textContent = 'UFO SA に接続する';
+        if (e.name !== 'NotFoundError') {
+          err.textContent = 'エラー: ' + e.message;
+        }
+      }
+    }
+
+    function skipConnect() {
+      enterMain(null);
+    }
+
+    function enterMain(deviceName) {
+      const screen = document.getElementById('connect-screen');
+      screen.classList.add('hidden');
+
+      // トップバーの接続状態を更新
+      if (deviceName) {
+        document.getElementById('bleLabel').textContent = deviceName + ' 接続済';
+        document.getElementById('bleDot').classList.remove('disconnected');
+      } else {
+        document.getElementById('bleLabel').textContent = '未接続（テスト）';
+        document.getElementById('bleDot').classList.add('disconnected');
+      }
+    }
+
+    function onDisconnected() {
+      bleChar = null;
+      document.getElementById('bleDot').classList.add('disconnected');
+      document.getElementById('bleLabel').textContent = '切断されました';
+
+      // 再接続を促す通知
+      if (confirm('UFO SA との接続が切れました。再接続しますか？')) {
+        const screen = document.getElementById('connect-screen');
+        screen.classList.remove('hidden', 'connecting');
+        document.getElementById('connectBtn').disabled = false;
+        document.getElementById('connectBtn').textContent = 'UFO SA に接続する';
+        document.getElementById('connectError').textContent = '';
+      }
+    }
+
+    // ── BLEコマンド送信 ──
+    async function sendCommand(direction, strength) {
+      if (!bleChar) return;
+      // strength: 0~100 → 0~127 に変換
+      const spd  = Math.round(strength / 100 * 127);
+      const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
+      try {
+        await bleChar.writeValue(new Uint8Array([UFO_ID, 0x01, byte2]));
+      } catch (e) {
+        console.warn('BLE送信エラー:', e);
+      }
+    }
+
+    // ── 全画面 ──
+    function toggleFullscreen() {
+      const area = document.getElementById('player-area');
+      if (!document.fullscreenElement) {
+        area.requestFullscreen().catch(e => {
+          // フォールバック：CSSクラスで代用
+          document.body.classList.add('fullscreen');
+        });
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    document.getElementById('video-wrap').addEventListener('click', () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else if (document.body.classList.contains('fullscreen')) {
+        document.body.classList.remove('fullscreen');
+      }
     });
 
+    // ── モード切り替え ──
     function toggleMode() {
-      const btn = document.getElementById('modeBtn');
+      const btn   = document.getElementById('modeBtn');
       const modes = ['CSV モード', 'ランダム', '波形連動'];
       let idx = modes.indexOf(btn.textContent.trim());
       idx = (idx + 1) % modes.length;
@@ -773,9 +1002,11 @@
       btn.classList.toggle('active', idx === 0);
     }
 
-    // スライダーの値表示
+    // ── 手動スライダー ──
     document.querySelector('.manual-slider').addEventListener('input', function() {
       document.querySelector('.manual-value').textContent = this.value;
+      // 手動操作時は向き0で送信（後で向きの選択UIを追加予定）
+      sendCommand(0, parseInt(this.value));
     });
   </script>
 </body>
