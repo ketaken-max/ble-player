@@ -708,6 +708,76 @@
 
     /* 接続画面が非表示のとき */
     #connect-screen.hidden { display: none; }
+
+    /* ── ハンバーガーボタン（スマホのみ表示） ── */
+    #hamburger {
+      display: none;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 20px;
+      cursor: pointer;
+      padding: 4px 8px;
+      line-height: 1;
+    }
+
+    /* ── サイドバーオーバーレイ（スマホ用） ── */
+    #sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.6);
+      z-index: 200;
+    }
+    #sidebar-overlay.open { display: block; }
+
+    /* ── スマホ向けレスポンシブ ── */
+    @media (max-width: 768px) {
+
+      #hamburger { display: block; }
+
+      #sidebar {
+        position: fixed;
+        top: 0; left: 0; bottom: 0;
+        z-index: 300;
+        width: 280px;
+        transform: translateX(-100%);
+        transition: transform .25s ease;
+      }
+      #sidebar.open { transform: translateX(0); }
+
+      #app { flex-direction: column; }
+      #main { width: 100%; }
+
+      #tracklist { padding: 10px 12px 8px; }
+      .work-header { flex-wrap: wrap; gap: 4px; }
+      .work-header h2 { font-size: 13px; }
+      .work-header .circle { margin-left: 0; width: 100%; }
+
+      .track { padding: 10px 14px; font-size: 12px; }
+
+      #video-wrap { min-height: 200px; }
+
+      #controls { padding: 8px 12px 10px; }
+      .play-btn { width: 44px; height: 44px; font-size: 18px; }
+      .icon-btn { font-size: 18px; padding: 8px; }
+
+      .btn-row { flex-wrap: wrap; gap: 8px; }
+      .manual-slider-wrap {
+        margin-left: 0;
+        width: 100%;
+        justify-content: flex-start;
+        padding-top: 4px;
+        border-top: 1px solid var(--border);
+      }
+      .manual-slider { width: calc(100% - 100px); }
+
+      #timeline { height: 80px; }
+
+      #connect-screen h1 { font-size: 18px; }
+      #connect-screen .connect-ring { width: 90px; height: 90px; }
+      #connect-screen .connect-icon { font-size: 30px; }
+    }
   </style>
 </head>
 <body>
@@ -727,8 +797,12 @@
     <button class="skip-btn" onclick="skipConnect()">接続せずに続ける（テスト用）</button>
   </div>
 
+  <!-- サイドバーオーバーレイ（スマホ用） -->
+  <div id="sidebar-overlay" onclick="closeSidebar()"></div>
+
   <!-- トップバー -->
   <div id="topbar">
+    <button id="hamburger" onclick="openSidebar()">☰</button>
     <span class="logo">BLE Player</span>
     <div class="ble-status">
       <div class="dot" id="bleDot"></div>
@@ -881,6 +955,16 @@
   </div>
 
   <script>
+    // ── サイドバー開閉（スマホ用） ──
+    function openSidebar() {
+      document.getElementById('sidebar').classList.add('open');
+      document.getElementById('sidebar-overlay').classList.add('open');
+    }
+    function closeSidebar() {
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebar-overlay').classList.remove('open');
+    }
+
     // ── BLE定数（UFO SA）──
     const UFO_SERVICE  = '40ee1111-63ec-4b7f-8ce7-712efd55b90e';
     const UFO_CHAR     = '40ee2222-63ec-4b7f-8ce7-712efd55b90e';
