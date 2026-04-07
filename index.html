@@ -965,7 +965,181 @@
   </div>
 
   <script>
-    // ── サイドバー開閉（スマホ用） ──
+  // ── ファイル管理 ──
+    let mediaFiles = {};
+    let csvFiles   = {};
+    let currentTrack = null;
+
+    const dropZone = document.getElementById('drop-zone');
+
+    document.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('active');
+    });
+    document.addEventListener('dragleave', (e) => {
+      if (e.relatedTarget === null) dropZone.classList.remove('active');
+    });
+    document.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('active');
+      const items = [...e.dataTransfer.items];
+      for (const item of items) {
+        const entry = item.webkitGetAsEntry();
+        if (entry && entry.isDirectory) await readFolder(entry);
+        else if (entry && entry.isFile) storeFile(item.getAsFile());
+      }
+      renderLibrary();
+    });
+
+    async function readFolder(dirEntry) {
+      return new Promise((resolve) => {
+        dirEntry.createReader().readEntries(async (entries) => {
+          for (const entry of entries) {
+            if (entry.isFile) {
+              const file = await entryToFile(entry);
+              storeFile(file);
+            } else if (entry.isDirectory) {
+              await readFolder(entry);
+            }
+          }
+          resolve();
+        });
+      });
+    }
+
+    function entryToFile(entry) {
+      return new Promise(resolve => entry.file(resolve));
+    }
+
+    function storeFile(file) {
+      const ext  = file.name.split('.').pop().toLowerCase();
+      const base = file.name.replace(/\.[^.]+$/, '');
+      if (['mp4','mp3','wav','ogg','m4a','webm'].includes(ext)) mediaFiles[base] = file;
+      else if (ext === 'csv') csvFiles[base] = file;
+    }
+
+    document.querySelector('.btn-outline').addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.multiple = true;
+      input.accept = 'video/*,audio/*,.csv';
+      input.webkitdirectory = true;
+      input.onchange = (e) => {
+        [...e.target.files].forEach(storeFile);
+        renderLibrary();
+      };
+      input.click();
+    });
+
+    function renderLibrary() {
+      const list = document.querySelector('.library-list');
+      list.innerHTML = '';
+      const bases = Object.keys(mediaFiles);
+      if (bases.length === 0) return;
+
+      const workItem = document.createElement('div');
+      workItem.className = 'work-item active';
+      workItem.innerHTML = `<div class="work-title">読み込み済み (${bases.length}トラック)</div>`;
+      list.appendChild(workItem);
+
+      const tracksEl = document.querySelector('.tracks');
+      tracksEl.innerHTML = '';
+      bases.forEach((base, i) => {
+        const hasCSV = !!csvFiles[base];
+        const div = document.createElement('div');
+        div.className = 'track' + (i === 0 ? ' active' : '');
+        div.innerHTML = `
+          <span>${String(i+1).padStart(2,'0')}. ${base}</span>
+          <span class="csv-badge ${hasCSV ? '' : 'missing'}">${hasCSV ? 'CSV' : '未割当'}</span>`;
+        div.addEventListener('click', () => loadTrack(base));
+        tracksEl.appendChild(div);
+      });
+      loadTrack(bases[0]);
+    }
+
+    // ── 再生機能 ──
+    const player = document.getElementById('media-player');
+
+    function loadTrack(base) {
+      currentTrack = base;
+      const file = mediaFiles[base];
+      if (!file) return;
+      document.querySelectorAll('.track').forEach(t => {
+        t.classList.toggle('active', t.querySelector('span').textContent.includes(base));
+      });
+      player.src = URL.createObjectURL(file);
+      player.load();
+      document.querySelector('.no-media').style.display = 'none';
+      player.style.display = 'block';
+      if (csvFiles[base]) loadCSV(csvFiles[base]);
+      else schedule = [];
+    }
+
+    player.addEventListener('timeupdate', () => {
+      const cur = player.currentTime;
+      const dur = player.duration || 0;
+      document.querySelectorAll('.time-display')[0].textContent = formatTime(cur);
+      document.querySelectorAll('.time-display')[1].textContent = formatTime(dur);
+      document.querySelector('.seekbar-fill').style.width = (dur ? cur/dur*100 : 0) + '%';
+      document.querySelector('.tl-playhead').style.left  = (dur ? cur/dur*100 : 0) + '%';
+    });
+
+    player.addEventListener('ended', () => {
+      document.querySelector('.play-btn').textContent = '▶';
+    });
+
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+    }
+
+    document.querySelector('.seekbar').addEventListener('click', (e) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      player.currentTime = ((e.clientX - rect.left) / rect.width) * (player.duration || 0);
+    });
+
+    document.querySelector('.play-btn').addEventListener('click', () => {
+      if (player.paused) {
+        player.play();
+        document.querySelector('.play-btn').textContent = '⏸';
+      } else {
+        player.pause();
+        document.querySelector('.play-btn').textContent = '▶';
+      }
+    });
+
+    // ── CSV読み込み ──
+    let schedule = [];
+
+    function loadCSV(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const lines = e.target.result.trim().split('\n').slice(1);
+        schedule = lines.map(line => {
+          const [time_ms, direction, strength] = line.split(',').map(s => s.trim());
+          return { time_ms: parseInt(time_ms), direction: parseInt(direction), strength: parseInt(strength) };
+        }).filter(r => !isNaN(r.time_ms));
+        player.addEventListener('loadedmetadata', renderTimeline, { once: true });
+      };
+      reader.readAsText(file);
+    }
+
+    function renderTimeline() {
+      const track = document.querySelector('.tl-track');
+      [...track.querySelectorAll('.tl-marker')].forEach(m => m.remove());
+      const dur = player.duration || 0;
+      schedule.forEach(row => {
+        const pct = dur ? (row.time_ms / 1000 / dur * 100) : 0;
+        const m = document.createElement('div');
+        m.className = `tl-marker dir${row.direction}`;
+        m.style.left = pct + '%';
+        m.title = `向き:${row.direction} 強さ:${row.strength}`;
+        m.addEventListener('click', () => { player.currentTime = row.time_ms / 1000; });
+        track.appendChild(m);
+      });
+    }
+  // ── サイドバー開閉（スマホ用） ──
     function openSidebar() {
       document.getElementById('sidebar').classList.add('open');
       document.getElementById('sidebar-overlay').classList.add('open');
