@@ -522,9 +522,8 @@
     }
 
     /* タイムラインマーカー */
-    .tl-marker {
+   .tl-marker {
   position: absolute;
-  top: 3px;
   bottom: 3px;
   width: 2px;
   border-radius: 1px;
@@ -1249,11 +1248,13 @@
       schedule.forEach(row => {
         const pct = dur ? (row.time_ms / 10/ dur * 100) : 0;
         const m = document.createElement('div');
-        m.className = `tl-marker dir${row.direction}`;
-        m.style.left = pct + '%';
-        m.title = `向き:${row.direction} 強さ:${row.strength}`;
-        m.addEventListener('click', () => { player.currentTime = row.time_ms / 10; });
-        track.appendChild(m);
+m.className = `tl-marker dir${row.direction}`;
+m.style.left = pct + '%';
+const trackHeight = document.querySelector('.tl-track').clientHeight - 6;
+m.style.height = Math.max(3, Math.round(row.strength / 100 * trackHeight)) + 'px';
+m.title = `向き:${row.direction} 強さ:${row.strength}`;
+m.addEventListener('click', () => { player.currentTime = row.time_ms / 10; });
+track.appendChild(m);
       });
     }
 
