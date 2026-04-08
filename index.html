@@ -991,15 +991,15 @@
 
     // ── BLEコマンド送信 ──
     async function sendCommand(direction, strength) {
-      if (!bleChar) return;
-      const spd   = Math.round(strength / 100 * 127);
-      const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
-      try {
-        await bleChar.writeValue(new Uint8Array([UFO_ID, 0x01, byte2]));
-      } catch (e) {
-        console.warn('BLE送信エラー:', e);
-      }
-    }
+  if (!bleChar) return;
+  const spd   = Math.min(127, Math.round(strength * 1.27));
+  const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
+  try {
+    await bleChar.writeValue(new Uint8Array([UFO_ID, 0x01, byte2]));
+  } catch (e) {
+    console.warn('BLE送信エラー:', e);
+  }
+}
 
     // ── 接続画面 ──
     async function startConnect() {
@@ -1269,7 +1269,7 @@
       if (!schedule.length) return;
       for (let i = lastSentIndex + 1; i < schedule.length; i++) {
         if (schedule[i].time_ms <= currentMs) {
-          sendCommand(schedule[i].direction,  Math.round(schedule[i].strength * 0.7));
+          sendCommand(schedule[i].direction,  schedule[i].strength);
           lastSentIndex = i;
         } else {
           break;
