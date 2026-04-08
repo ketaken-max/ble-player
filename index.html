@@ -1191,7 +1191,7 @@
       document.querySelectorAll('.time-display')[1].textContent = formatTime(dur);
       document.querySelector('.seekbar-fill').style.width = (dur ? cur/dur*100 : 0) + '%';
       document.querySelector('.tl-playhead').style.left  = (dur ? cur/dur*100 : 0) + '%';
-      processBLESchedule(cur * 10);
+      processBLESchedule(cur * 7);
     });
 
     player.addEventListener('ended', () => {
