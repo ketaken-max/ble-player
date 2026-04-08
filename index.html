@@ -1290,7 +1290,13 @@ m.style.height = Math.max(3, Math.round(row.strength / 100 * trackHeight)) + 'px
 m.title = `向き:${row.direction} 強さ:${row.strength}`;
 m.addEventListener('click', () => { player.currentTime = row.time_ms / 10; });
 track.appendChild(m);
-      });
+        const dur = player.duration || 0;
+const marks = document.querySelectorAll('.tl-time-mark');
+const count = marks.length - 1;
+marks.forEach((mark, i) => {
+  mark.textContent = formatTime(dur / count * i);
+});
+
     }
 
     // ── CSVスケジュール実行 ──
