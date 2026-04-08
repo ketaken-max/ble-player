@@ -780,7 +780,7 @@
         padding-top: 4px;
         border-top: 1px solid var(--border);
       }
-      .manual-slider { width: calc(100% - 100px); }
+      .manual-slider { width: calc(100% - 80px); }
 
       #timeline { height: 80px; }
 
@@ -926,11 +926,7 @@
             <button class="icon-btn" title="次のトラック">⏭</button>
             <button class="icon-btn" title="連続再生">↻</button>
 
-            <div class="manual-slider-wrap">
-              <span class="manual-slider-label">手動強度</span>
-              <input type="range" class="manual-slider" min="0" max="100" value="0"
-                oninput="document.querySelector('.manual-value').textContent = this.value">
-              <span class="manual-value">0</span>
+            
             <div class="manual-slider-wrap">
   <span class="manual-slider-label">音量</span>
   <input type="range" class="manual-slider" min="0" max="100" value="100"
@@ -1228,12 +1224,7 @@
       }
     });
 
-    // ── 手動スライダー ──
-    document.querySelector('.manual-slider').addEventListener('input', function() {
-      document.querySelector('.manual-value').textContent = this.value;
-      sendCommand(0, parseInt(this.value));
-    });
-
+   
     // ── CSV読み込み ──
     let schedule = [];
     let speedRateValue = 0.5;
