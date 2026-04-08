@@ -788,23 +788,7 @@
       #connect-screen .connect-ring { width: 90px; height: 90px; }
       #connect-screen .connect-icon { font-size: 30px; }
     }
-  /* ── ドロップゾーン ── */
-    #drop-zone {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(124,106,255,.15);
-      border: 2px dashed var(--accent);
-      z-index: 500;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      letter-spacing: .1em;
-      color: var(--accent);
-      pointer-events: none;
-    }
-    #drop-zone.active { display: flex; }
-</style>
+  </style>
 </head>
 <body>
 
@@ -822,7 +806,6 @@
     <div class="connect-error" id="connectError"></div>
     <button class="skip-btn" onclick="skipConnect()">接続せずに続ける（テスト用）</button>
   </div>
-　<div id="drop-zone">フォルダをドロップ</div>
 
   <!-- サイドバーオーバーレイ（スマホ用） -->
   <div id="sidebar-overlay" onclick="closeSidebar()"></div>
@@ -921,9 +904,8 @@
         <div id="video-wrap">
           <div class="no-media">
             <div class="icon">▶</div>
-            <p>フォルダを追加してください</p>
+            <p>トラックを選択してください</p>
           </div>
-          <video id="media-player" style="display:none; max-width:100%; max-height:100%;"></video>
           <button class="fullscreen-btn" onclick="toggleFullscreen()">⛶ 全画面</button>
           <div class="fullscreen-hint">クリックで UI を表示</div>
         </div>
@@ -983,9 +965,117 @@
   </div>
 
   <script>
-  // ── ファイル管理 ──
-    let mediaFiles = {};
-    let csvFiles   = {};
+    // ── サイドバー開閉（スマホ用） ──
+    function openSidebar() {
+      document.getElementById('sidebar').classList.add('open');
+      document.getElementById('sidebar-overlay').classList.add('open');
+    }
+    function closeSidebar() {
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebar-overlay').classList.remove('open');
+    }
+
+    // ── BLE定数（UFO SA）──
+    const UFO_SERVICE = '40ee1111-63ec-4b7f-8ce7-712efd55b90e';
+    const UFO_CHAR    = '40ee2222-63ec-4b7f-8ce7-712efd55b90e';
+    const UFO_ID      = 0x02;
+
+    let bleDevice = null;
+    let bleChar   = null;
+
+    // ── BLEコマンド送信 ──
+    async function sendCommand(direction, strength) {
+      if (!bleChar) return;
+      const spd   = Math.round(strength / 100 * 127);
+      const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
+      try {
+        await bleChar.writeValue(new Uint8Array([UFO_ID, 0x01, byte2]));
+      } catch (e) {
+        console.warn('BLE送信エラー:', e);
+      }
+    }
+
+    // ── 接続画面 ──
+    async function startConnect() {
+      const btn    = document.getElementById('connectBtn');
+      const err    = document.getElementById('connectError');
+      const screen = document.getElementById('connect-screen');
+      btn.disabled    = true;
+      btn.textContent = '接続中…';
+      err.textContent = '';
+      screen.classList.add('connecting');
+      try {
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ name: 'UFOSA' }],
+          optionalServices: [UFO_SERVICE]
+        });
+        const server  = await bleDevice.gatt.connect();
+        const service = await server.getPrimaryService(UFO_SERVICE);
+        bleChar = await service.getCharacteristic(UFO_CHAR);
+        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+        enterMain(bleDevice.name || 'UFO SA');
+      } catch (e) {
+        screen.classList.remove('connecting');
+        btn.disabled    = false;
+        btn.textContent = 'UFO SA に接続する';
+        if (e.name !== 'NotFoundError') err.textContent = 'エラー: ' + e.message;
+      }
+    }
+
+    function skipConnect() { enterMain(null); }
+
+    function enterMain(deviceName) {
+      document.getElementById('connect-screen').classList.add('hidden');
+      if (deviceName) {
+        document.getElementById('bleLabel').textContent = deviceName + ' 接続済';
+        document.getElementById('bleDot').classList.remove('disconnected');
+      } else {
+        document.getElementById('bleLabel').textContent = '未接続（テスト）';
+        document.getElementById('bleDot').classList.add('disconnected');
+      }
+    }
+
+    function onDisconnected() {
+      bleChar = null;
+      document.getElementById('bleDot').classList.add('disconnected');
+      document.getElementById('bleLabel').textContent = '切断されました';
+      if (confirm('UFO SA との接続が切れました。再接続しますか？')) {
+        const screen = document.getElementById('connect-screen');
+        screen.classList.remove('hidden', 'connecting');
+        document.getElementById('connectBtn').disabled = false;
+        document.getElementById('connectBtn').textContent = 'UFO SA に接続する';
+        document.getElementById('connectError').textContent = '';
+      }
+    }
+
+    // ── 全画面 ──
+    function toggleFullscreen() {
+      const area = document.getElementById('player-area');
+      if (!document.fullscreenElement) {
+        area.requestFullscreen().catch(() => document.body.classList.add('fullscreen'));
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    document.getElementById('video-wrap').addEventListener('click', () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else if (document.body.classList.contains('fullscreen')) document.body.classList.remove('fullscreen');
+    });
+
+    // ── モード切り替え ──
+    function toggleMode() {
+      const btn   = document.getElementById('modeBtn');
+      const modes = ['CSV モード', 'ランダム', '波形連動'];
+      let idx = modes.indexOf(btn.textContent.trim());
+      idx = (idx + 1) % modes.length;
+      btn.textContent = modes[idx];
+      btn.classList.toggle('active', idx === 0);
+    }
+
+    // ── ファイル管理 ──
+    let mediaFiles   = {};
+    let csvFiles     = {};
     let currentTrack = null;
 
     const dropZone = document.getElementById('drop-zone');
@@ -1000,8 +1090,7 @@
     document.addEventListener('drop', async (e) => {
       e.preventDefault();
       dropZone.classList.remove('active');
-      const items = [...e.dataTransfer.items];
-      for (const item of items) {
+      for (const item of [...e.dataTransfer.items]) {
         const entry = item.webkitGetAsEntry();
         if (entry && entry.isDirectory) await readFolder(entry);
         else if (entry && entry.isFile) storeFile(item.getAsFile());
@@ -1013,12 +1102,8 @@
       return new Promise((resolve) => {
         dirEntry.createReader().readEntries(async (entries) => {
           for (const entry of entries) {
-            if (entry.isFile) {
-              const file = await entryToFile(entry);
-              storeFile(file);
-            } else if (entry.isDirectory) {
-              await readFolder(entry);
-            }
+            if (entry.isFile) storeFile(await entryToFile(entry));
+            else if (entry.isDirectory) await readFolder(entry);
           }
           resolve();
         });
@@ -1038,9 +1123,9 @@
 
     document.querySelector('.btn-outline').addEventListener('click', () => {
       const input = document.createElement('input');
-      input.type = 'file';
+      input.type  = 'file';
       input.multiple = true;
-      input.accept = 'video/*,audio/*,.csv';
+      input.accept   = 'video/*,audio/*,.csv';
       input.webkitdirectory = true;
       input.onchange = (e) => {
         [...e.target.files].forEach(storeFile);
@@ -1050,10 +1135,10 @@
     });
 
     function renderLibrary() {
-      const list = document.querySelector('.library-list');
-      list.innerHTML = '';
+      const list  = document.querySelector('.library-list');
       const bases = Object.keys(mediaFiles);
-      if (bases.length === 0) return;
+      list.innerHTML = '';
+      if (!bases.length) return;
 
       const workItem = document.createElement('div');
       workItem.className = 'work-item active';
@@ -1100,21 +1185,15 @@
       document.querySelectorAll('.time-display')[1].textContent = formatTime(dur);
       document.querySelector('.seekbar-fill').style.width = (dur ? cur/dur*100 : 0) + '%';
       document.querySelector('.tl-playhead').style.left  = (dur ? cur/dur*100 : 0) + '%';
-      // CSVコマンド送信
       processBLESchedule(cur * 1000);
-    });
-      document.querySelector('.seekbar-fill').style.width = (dur ? cur/dur*100 : 0) + '%';
-      document.querySelector('.tl-playhead').style.left  = (dur ? cur/dur*100 : 0) + '%';
     });
 
     player.addEventListener('ended', () => {
       document.querySelector('.play-btn').textContent = '▶';
-      sendCommand(0, 0); // 停止
+      sendCommand(0, 0);
     });
 
-player.addEventListener('pause', () => {
-      sendCommand(0, 0); // 一時停止時も停止
-    });
+    player.addEventListener('pause', () => { sendCommand(0, 0); });
 
     function formatTime(sec) {
       const m = Math.floor(sec / 60);
@@ -1137,6 +1216,12 @@ player.addEventListener('pause', () => {
       }
     });
 
+    // ── 手動スライダー ──
+    document.querySelector('.manual-slider').addEventListener('input', function() {
+      document.querySelector('.manual-value').textContent = this.value;
+      sendCommand(0, parseInt(this.value));
+    });
+
     // ── CSV読み込み ──
     let schedule = [];
 
@@ -1153,8 +1238,8 @@ player.addEventListener('pause', () => {
       reader.readAsText(file);
     }
 
-    function renderTimeline() { 
-const track = document.querySelector('.tl-track');
+    function renderTimeline() {
+      const track = document.querySelector('.tl-track');
       [...track.querySelectorAll('.tl-marker')].forEach(m => m.remove());
       const dur = player.duration || 0;
       schedule.forEach(row => {
@@ -1167,7 +1252,8 @@ const track = document.querySelector('.tl-track');
         track.appendChild(m);
       });
     }
-// ── CSVスケジュール実行 ──
+
+    // ── CSVスケジュール実行 ──
     let lastSentIndex = -1;
 
     player.addEventListener('play',   () => { lastSentIndex = -1; });
@@ -1184,146 +1270,6 @@ const track = document.querySelector('.tl-track');
         }
       }
     }
-  // ── サイドバー開閉（スマホ用） ──
-    function openSidebar() {
-      document.getElementById('sidebar').classList.add('open');
-      document.getElementById('sidebar-overlay').classList.add('open');
-    }
-    function closeSidebar() {
-      document.getElementById('sidebar').classList.remove('open');
-      document.getElementById('sidebar-overlay').classList.remove('open');
-    }
-
-    // ── BLE定数（UFO SA）──
-    const UFO_SERVICE  = '40ee1111-63ec-4b7f-8ce7-712efd55b90e';
-    const UFO_CHAR     = '40ee2222-63ec-4b7f-8ce7-712efd55b90e';
-    const UFO_ID       = 0x02;
-
-    let bleDevice = null;
-    let bleChar   = null;
-
-    // ── 接続画面 ──
-    async function startConnect() {
-      const btn   = document.getElementById('connectBtn');
-      const err   = document.getElementById('connectError');
-      const screen = document.getElementById('connect-screen');
-
-      btn.disabled  = true;
-      btn.textContent = '接続中…';
-      err.textContent = '';
-      screen.classList.add('connecting');
-
-      try {
-        bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'UFOSA' }],
-          optionalServices: [UFO_SERVICE]
-        });
-
-        const server  = await bleDevice.gatt.connect();
-        const service = await server.getPrimaryService(UFO_SERVICE);
-        bleChar        = await service.getCharacteristic(UFO_CHAR);
-
-        // 切断検知
-        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
-
-        // 接続成功 → メイン画面へ
-        enterMain(bleDevice.name || 'UFO SA');
-
-      } catch (e) {
-        screen.classList.remove('connecting');
-        btn.disabled    = false;
-        btn.textContent = 'UFO SA に接続する';
-        if (e.name !== 'NotFoundError') {
-          err.textContent = 'エラー: ' + e.message;
-        }
-      }
-    }
-
-    function skipConnect() {
-      enterMain(null);
-    }
-
-    function enterMain(deviceName) {
-      const screen = document.getElementById('connect-screen');
-      screen.classList.add('hidden');
-
-      // トップバーの接続状態を更新
-      if (deviceName) {
-        document.getElementById('bleLabel').textContent = deviceName + ' 接続済';
-        document.getElementById('bleDot').classList.remove('disconnected');
-      } else {
-        document.getElementById('bleLabel').textContent = '未接続（テスト）';
-        document.getElementById('bleDot').classList.add('disconnected');
-      }
-    }
-
-    function onDisconnected() {
-      bleChar = null;
-      document.getElementById('bleDot').classList.add('disconnected');
-      document.getElementById('bleLabel').textContent = '切断されました';
-
-      // 再接続を促す通知
-      if (confirm('UFO SA との接続が切れました。再接続しますか？')) {
-        const screen = document.getElementById('connect-screen');
-        screen.classList.remove('hidden', 'connecting');
-        document.getElementById('connectBtn').disabled = false;
-        document.getElementById('connectBtn').textContent = 'UFO SA に接続する';
-        document.getElementById('connectError').textContent = '';
-      }
-    }
-
-    // ── BLEコマンド送信 ──
-    async function sendCommand(direction, strength) {
-      if (!bleChar) return;
-      // strength: 0~100 → 0~127 に変換
-      const spd  = Math.round(strength / 100 * 127);
-      const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
-      try {
-        await bleChar.writeValue(new Uint8Array([UFO_ID, 0x01, byte2]));
-      } catch (e) {
-        console.warn('BLE送信エラー:', e);
-      }
-    }
-
-    // ── 全画面 ──
-    function toggleFullscreen() {
-      const area = document.getElementById('player-area');
-      if (!document.fullscreenElement) {
-        area.requestFullscreen().catch(e => {
-          // フォールバック：CSSクラスで代用
-          document.body.classList.add('fullscreen');
-        });
-      } else {
-        document.exitFullscreen();
-      }
-    }
-
-    document.getElementById('video-wrap').addEventListener('click', () => {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else if (document.body.classList.contains('fullscreen')) {
-        document.body.classList.remove('fullscreen');
-      }
-    });
-
-    // ── モード切り替え ──
-    function toggleMode() {
-      const btn   = document.getElementById('modeBtn');
-      const modes = ['CSV モード', 'ランダム', '波形連動'];
-      let idx = modes.indexOf(btn.textContent.trim());
-      idx = (idx + 1) % modes.length;
-      btn.textContent = modes[idx];
-      btn.classList.toggle('active', idx === 0);
-    }
-
-    // ── 手動スライダー ──
-    document.querySelector('.manual-slider').addEventListener('input', function() {
-      document.querySelector('.manual-value').textContent = this.value;
-      sendCommand(0, parseInt(this.value));
-    });
-      document.querySelector('.manual-value').textContent = this.value;
-      // 手動操作時は向き0で送信（後で向きの選択UIを追加予定）
-      sendCommand(0, parseInt(this.value));
-    });
   </script>
 </body>
 </html>
