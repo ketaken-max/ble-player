@@ -1191,7 +1191,7 @@
       document.querySelectorAll('.time-display')[1].textContent = formatTime(dur);
       document.querySelector('.seekbar-fill').style.width = (dur ? cur/dur*100 : 0) + '%';
       document.querySelector('.tl-playhead').style.left  = (dur ? cur/dur*100 : 0) + '%';
-      processBLESchedule(cur * 7);
+      processBLESchedule(cur * 10);
     });
 
     player.addEventListener('ended', () => {
@@ -1269,7 +1269,7 @@
       if (!schedule.length) return;
       for (let i = lastSentIndex + 1; i < schedule.length; i++) {
         if (schedule[i].time_ms <= currentMs) {
-          sendCommand(schedule[i].direction, schedule[i].strength);
+          sendCommand(schedule[i].direction,  Math.round(schedule[i].strength * 0.7));
           lastSentIndex = i;
         } else {
           break;
