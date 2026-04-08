@@ -1277,26 +1277,26 @@ let isLoopAll = false;
     }
 
     function renderTimeline() {
-      const track = document.querySelector('.tl-track');
-      [...track.querySelectorAll('.tl-marker')].forEach(m => m.remove());
-      const dur = player.duration || 0;
-      schedule.forEach(row => {
-        const pct = dur ? (row.time_ms / 10/ dur * 100) : 0;
-        const m = document.createElement('div');
-m.className = `tl-marker dir${row.direction}`;
-m.style.left = pct + '%';
-const trackHeight = document.querySelector('.tl-track').clientHeight - 6;
-m.style.height = Math.max(3, Math.round(row.strength / 100 * trackHeight)) + 'px';
-m.title = `向き:${row.direction} 強さ:${row.strength}`;
-m.addEventListener('click', () => { player.currentTime = row.time_ms / 10; });
-track.appendChild(m);
-        }
-        const totalDur = player.duration || 0;
-const marks = document.querySelectorAll('.tl-time-mark');
-const count = marks.length - 1;
-marks.forEach((mark, i) => {
-  mark.textContent = formatTime(totalDur / count * i);
-});
+  const track = document.querySelector('.tl-track');
+  [...track.querySelectorAll('.tl-marker')].forEach(m => m.remove());
+  const dur = player.duration || 0;
+  const trackHeight = track.clientHeight - 6;
+  schedule.forEach(row => {
+    const pct = dur ? (row.time_ms / 10 / dur * 100) : 0;
+    const m = document.createElement('div');
+    m.className = `tl-marker dir${row.direction}`;
+    m.style.left = pct + '%';
+    m.style.height = Math.max(3, Math.round(row.strength / 100 * trackHeight)) + 'px';
+    m.title = `向き:${row.direction} 強さ:${row.strength}`;
+    m.addEventListener('click', () => { player.currentTime = row.time_ms / 10; });
+    track.appendChild(m);
+  });
+  const totalDur = dur;
+  const marks = document.querySelectorAll('.tl-time-mark');
+  const count = marks.length - 1;
+  marks.forEach((mark, i) => {
+    mark.textContent = formatTime(totalDur / count * i);
+  });
 }
     // ── CSVスケジュール実行 ──
     let lastSentIndex = -1;
