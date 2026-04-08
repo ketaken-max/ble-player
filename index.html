@@ -936,6 +936,12 @@
   <input type="range" class="manual-slider" min="0" max="100" value="100"
     oninput="player.volume = this.value / 100; document.querySelectorAll('.manual-value')[1].textContent = this.value">
   <span class="manual-value">100</span>
+              <div class="manual-slider-wrap">
+  <span class="manual-slider-label">速度倍率</span>
+  <input type="range" class="manual-slider" id="speedRate" min="0" max="100" value="50"
+    oninput="speedRateValue = this.value / 100; document.getElementById('speedRateLabel').textContent = this.value + '%'">
+  <span class="manual-value" id="speedRateLabel">50%</span>
+</div>
             </div>
           </div>
         </div>
@@ -992,7 +998,7 @@
     // ── BLEコマンド送信 ──
     async function sendCommand(direction, strength) {
   if (!bleChar) return;
-  const spd   = Math.min(100, Math.floor(strength * 0.5));
+  const spd   = Math.min(100, Math.floor(strength * speedRateValue));
   const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
   try {
     await bleChar.writeValue(new Uint8Array([UFO_ID, 0x01, byte2]));
@@ -1230,6 +1236,7 @@
 
     // ── CSV読み込み ──
     let schedule = [];
+    let speedRateValue = 0.5;
 
     function loadCSV(file) {
       const reader = new FileReader();
