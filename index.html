@@ -1079,6 +1079,24 @@
       btn.textContent = modes[idx];
       btn.classList.toggle('active', idx === 0);
     }
+    
+    // ── 前後トラック・連続再生 ──
+document.querySelectorAll('.icon-btn')[0].addEventListener('click', () => {
+  if (!trackList.length) return;
+  currentTrackIndex = (currentTrackIndex - 1 + trackList.length) % trackList.length;
+  loadTrack(trackList[currentTrackIndex]);
+});
+
+document.querySelectorAll('.icon-btn')[1].addEventListener('click', () => {
+  if (!trackList.length) return;
+  currentTrackIndex = (currentTrackIndex + 1) % trackList.length;
+  loadTrack(trackList[currentTrackIndex]);
+});
+
+document.querySelectorAll('.icon-btn')[2].addEventListener('click', function() {
+  isLoopAll = !isLoopAll;
+  this.style.color = isLoopAll ? 'var(--accent)' : '';
+});
 
     // ── ファイル管理 ──
     let mediaFiles   = {};
@@ -1164,6 +1182,8 @@
         div.addEventListener('click', () => loadTrack(base));
         tracksEl.appendChild(div);
       });
+      trackList = bases;
+currentTrackIndex = 0;
       loadTrack(bases[0]);
     }
 
@@ -1171,19 +1191,20 @@
     const player = document.getElementById('media-player');
 
     function loadTrack(base) {
-      currentTrack = base;
-      const file = mediaFiles[base];
-      if (!file) return;
-      document.querySelectorAll('.track').forEach(t => {
-        t.classList.toggle('active', t.querySelector('span').textContent.includes(base));
-      });
-      player.src = URL.createObjectURL(file);
-      player.load();
-      document.querySelector('.no-media').style.display = 'none';
-      player.style.display = 'block';
-      if (csvFiles[base]) loadCSV(csvFiles[base]);
-      else schedule = [];
-    }
+  currentTrack = base;
+  currentTrackIndex = trackList.indexOf(base);
+  const file = mediaFiles[base];
+  if (!file) return;
+  document.querySelectorAll('.track').forEach(t => {
+    t.classList.toggle('active', t.querySelector('span').textContent.includes(base));
+  });
+  player.src = URL.createObjectURL(file);
+  player.load();
+  document.querySelector('.no-media').style.display = 'none';
+  player.style.display = 'block';
+  if (csvFiles[base]) loadCSV(csvFiles[base]);
+  else schedule = [];
+}
 
     player.addEventListener('timeupdate', () => {
       const cur = player.currentTime;
@@ -1196,9 +1217,15 @@
     });
 
     player.addEventListener('ended', () => {
-      document.querySelector('.play-btn').textContent = '▶';
-      sendCommand(0, 0);
-    });
+  document.querySelector('.play-btn').textContent = '▶';
+  sendCommand(0, 0);
+  if (isLoopAll && trackList.length > 0) {
+    currentTrackIndex = (currentTrackIndex + 1) % trackList.length;
+    loadTrack(trackList[currentTrackIndex]);
+    player.play();
+    document.querySelector('.play-btn').textContent = '⏸';
+  }
+});
 
     player.addEventListener('pause', () => { sendCommand(0, 0); });
 
@@ -1225,6 +1252,9 @@
 
    
     // ── CSV読み込み ──
+    let trackList = [];
+let currentTrackIndex = 0;
+let isLoopAll = false;
     let schedule = [];
     let speedRateValue = 0.5;
 
