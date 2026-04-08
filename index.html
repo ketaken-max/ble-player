@@ -992,7 +992,7 @@
     // ── BLEコマンド送信 ──
     async function sendCommand(direction, strength) {
   if (!bleChar) return;
-  const spd   = Math.min(127, Math.round(strength * 1.27));
+  const spd   = Math.min(100, Math.round(strength));
   const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
   try {
     await bleChar.writeValue(new Uint8Array([UFO_ID, 0x01, byte2]));
