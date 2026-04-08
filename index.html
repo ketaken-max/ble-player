@@ -1100,6 +1100,11 @@
       document.querySelectorAll('.time-display')[1].textContent = formatTime(dur);
       document.querySelector('.seekbar-fill').style.width = (dur ? cur/dur*100 : 0) + '%';
       document.querySelector('.tl-playhead').style.left  = (dur ? cur/dur*100 : 0) + '%';
+      // CSVコマンド送信
+      processBLESchedule(cur * 1000);
+    });
+      document.querySelector('.seekbar-fill').style.width = (dur ? cur/dur*100 : 0) + '%';
+      document.querySelector('.tl-playhead').style.left  = (dur ? cur/dur*100 : 0) + '%';
     });
 
     player.addEventListener('ended', () => {
@@ -1143,8 +1148,8 @@
       reader.readAsText(file);
     }
 
-    function renderTimeline() {
-      const track = document.querySelector('.tl-track');
+    function renderTimeline() { 
+const track = document.querySelector('.tl-track');
       [...track.querySelectorAll('.tl-marker')].forEach(m => m.remove());
       const dur = player.duration || 0;
       schedule.forEach(row => {
@@ -1156,6 +1161,23 @@
         m.addEventListener('click', () => { player.currentTime = row.time_ms / 1000; });
         track.appendChild(m);
       });
+    }
+// ── CSVスケジュール実行 ──
+    let lastSentIndex = -1;
+
+    player.addEventListener('play',   () => { lastSentIndex = -1; });
+    player.addEventListener('seeked', () => { lastSentIndex = -1; });
+
+    function processBLESchedule(currentMs) {
+      if (!schedule.length) return;
+      for (let i = lastSentIndex + 1; i < schedule.length; i++) {
+        if (schedule[i].time_ms <= currentMs) {
+          sendCommand(schedule[i].direction, schedule[i].strength);
+          lastSentIndex = i;
+        } else {
+          break;
+        }
+      }
     }
   // ── サイドバー開閉（スマホ用） ──
     function openSidebar() {
