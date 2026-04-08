@@ -788,7 +788,23 @@
       #connect-screen .connect-ring { width: 90px; height: 90px; }
       #connect-screen .connect-icon { font-size: 30px; }
     }
-  </style>
+  /* ── ドロップゾーン ── */
+    #drop-zone {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(124,106,255,.15);
+      border: 2px dashed var(--accent);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      letter-spacing: .1em;
+      color: var(--accent);
+      pointer-events: none;
+    }
+    #drop-zone.active { display: flex; }
+</style>
 </head>
 <body>
 
@@ -806,6 +822,7 @@
     <div class="connect-error" id="connectError"></div>
     <button class="skip-btn" onclick="skipConnect()">接続せずに続ける（テスト用）</button>
   </div>
+　<div id="drop-zone">フォルダをドロップ</div>
 
   <!-- サイドバーオーバーレイ（スマホ用） -->
   <div id="sidebar-overlay" onclick="closeSidebar()"></div>
