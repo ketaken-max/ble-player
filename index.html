@@ -523,18 +523,18 @@
 
     /* タイムラインマーカー */
     .tl-marker {
-      position: absolute;
-      top: 2px;
-      bottom: 2px;
-      width: 6px;
-      border-radius: 2px;
-      transform: translateX(-50%);
-      cursor: pointer;
-      transition: opacity .15s;
-    }
-    .tl-marker:hover { opacity: .7; }
-    .tl-marker.dir0 { background: var(--accent); box-shadow: 0 0 6px rgba(124,106,255,.6); }
-    .tl-marker.dir1 { background: var(--accent2); box-shadow: 0 0 6px rgba(255,106,176,.6); }
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  width: 2px;
+  border-radius: 1px;
+  transform: translateX(-50%);
+  cursor: pointer;
+  transition: opacity .15s;
+}
+.tl-marker:hover { opacity: .7; }
+.tl-marker.dir0 { background: var(--accent); }
+.tl-marker.dir1 { background: var(--accent2); }
 
     .tl-time-marks {
       position: absolute;
