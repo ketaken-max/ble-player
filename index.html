@@ -1109,6 +1109,11 @@
 
     player.addEventListener('ended', () => {
       document.querySelector('.play-btn').textContent = '▶';
+      sendCommand(0, 0); // 停止
+    });
+
+player.addEventListener('pause', () => {
+      sendCommand(0, 0); // 一時停止時も停止
     });
 
     function formatTime(sec) {
@@ -1312,6 +1317,9 @@ const track = document.querySelector('.tl-track');
 
     // ── 手動スライダー ──
     document.querySelector('.manual-slider').addEventListener('input', function() {
+      document.querySelector('.manual-value').textContent = this.value;
+      sendCommand(0, parseInt(this.value));
+    });
       document.querySelector('.manual-value').textContent = this.value;
       // 手動操作時は向き0で送信（後で向きの選択UIを追加予定）
       sendCommand(0, parseInt(this.value));
