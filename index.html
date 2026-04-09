@@ -878,6 +878,11 @@ function showControlsTemporary() {
 }
 
 let controlsTimer = null;
+    document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('fullscreen')) {
+    exitFullscreen();
+  }
+});
 
 document.getElementById('video-wrap').addEventListener('click', () => {
   if (document.body.classList.contains('fullscreen')) {
