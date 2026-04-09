@@ -86,6 +86,7 @@
     .no-media .icon { font-size: 48px; opacity: .3; }
     .no-media p { font-size: 12px; font-family: 'JetBrains Mono', monospace; letter-spacing: .1em; }
     .fullscreen-btn { position: absolute; top: 12px; right: 12px; background: rgba(0,0,0,.5); border: 1px solid var(--border); border-radius: 6px; color: var(--text-dim); padding: 6px 10px; font-size: 11px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all .15s; }
+    <button class="exit-fullscreen-btn" onclick="exitFullscreen()">✕ 全画面終了</button>
     .fullscreen-hint { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); font-family: 'JetBrains Mono', monospace; font-size: 10px; color: rgba(255,255,255,.3); letter-spacing: .1em; pointer-events: none; opacity: 0; transition: opacity .3s; }
     body.fullscreen .fullscreen-hint { opacity: 1; }
 
@@ -860,15 +861,29 @@ body.fullscreen .exit-fullscreen-btn { display: block; }
     function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebar-overlay').classList.remove('open'); }
 
     function toggleFullscreen() {
-      const area = document.getElementById('player-area');
-      if (!document.fullscreenElement) area.requestFullscreen().catch(() => document.body.classList.add('fullscreen'));
-      else document.exitFullscreen();
-    }
+  document.body.classList.add('fullscreen');
+  showControlsTemporary();
+}
 
-    document.getElementById('video-wrap').addEventListener('click', () => {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else if (document.body.classList.contains('fullscreen')) document.body.classList.remove('fullscreen');
-    });
+function exitFullscreen() {
+  document.body.classList.remove('fullscreen', 'show-controls');
+}
+
+function showControlsTemporary() {
+  document.body.classList.add('show-controls');
+  clearTimeout(controlsTimer);
+  controlsTimer = setTimeout(() => {
+    document.body.classList.remove('show-controls');
+  }, 3000);
+}
+
+let controlsTimer = null;
+
+document.getElementById('video-wrap').addEventListener('click', () => {
+  if (document.body.classList.contains('fullscreen')) {
+    showControlsTemporary();
+  }
+});
 
     function toggleMode() {
       const btn   = document.getElementById('modeBtn');
