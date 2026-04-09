@@ -130,7 +130,9 @@
     body.fullscreen #main { background: #000; }
     body.fullscreen #video-wrap { position: fixed; inset: 0; z-index: 401; }
     body.fullscreen #controls,
-    body.fullscreen #timeline { position: relative; z-index: 402; opacity: 0; transition: opacity .3s; pointer-events: none; }
+    body.fullscreen #timeline { position: fixed; left: 0; right: 0; z-index: 402; opacity: 0; transition: opacity .3s; pointer-events: none; }
+    body.fullscreen #controls  { bottom: 0; }
+    body.fullscreen #timeline  { bottom: 0; transform: translateY(-100%); }
     body.fullscreen.show-controls #controls,
     body.fullscreen.show-controls #timeline { opacity: 1; pointer-events: auto; }
     .exit-fullscreen-btn { display: none; position: absolute; top: 12px; left: 12px; z-index: 410; background: rgba(0,0,0,.6); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 8px 14px; font-size: 13px; cursor: pointer; font-family: 'JetBrains Mono', monospace; }
@@ -400,6 +402,8 @@
       } else {
         document.getElementById('bleLabel').textContent = '未接続（テスト）';
       }
+      // 自動でフォルダ選択ダイアログを開く
+      document.getElementById('addFolderBtn').click();
     }
 
     function onDisconnected() {
