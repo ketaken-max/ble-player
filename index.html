@@ -85,8 +85,10 @@
     .no-media { display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--text-dim); }
     .no-media .icon { font-size: 48px; opacity: .3; }
     .no-media p { font-size: 12px; font-family: 'JetBrains Mono', monospace; letter-spacing: .1em; }
-    .fullscreen-btn<button class="exit-fullscreen-btn" onclick="exitFullscreen()">✕ 全画面終了</button> { position: absolute; top: 12px; right: 12px; background: rgba(0,0,0,.5); border: 1px solid var(--border); border-radius: 6px; color: var(--text-dim); padding: 6px 10px; font-size: 11px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all .15s; }
-    
+    .fullscreen-btn { position: absolute; top: 12px; right: 12px; background: rgba(0,0,0,.5); border: 1px solid var(--border); border-radius: 6px; color: var(--text-dim); padding: 6px 10px; font-size: 11px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all .15s; }
+    <button class="fullscreen-btn" onclick="toggleFullscreen()">⛶ 全画面</button>
+          <button class="exit-fullscreen-btn" onclick="exitFullscreen()">✕ 終了</button>
+          <div class="fullscreen-hint">タップで UI を表示</div>
     .fullscreen-hint { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); font-family: 'JetBrains Mono', monospace; font-size: 10px; color: rgba(255,255,255,.3); letter-spacing: .1em; pointer-events: none; opacity: 0; transition: opacity .3s; }
     body.fullscreen .fullscreen-hint { opacity: 1; }
 
@@ -124,53 +126,55 @@
     .mode-badge:hover { border-color: var(--accent); color: var(--accent); }
     .mode-badge.active { border-color: var(--success); color: var(--success); background: rgba(79,255,176,.08); }
 
-    /* ── 全画面モード ── */
-body.fullscreen #sidebar,
-body.fullscreen #topbar,
-body.fullscreen #tracklist { display: none; }
+    /* ── 全画面 ── */
+    body.fullscreen #sidebar,
+    body.fullscreen #topbar,
+    body.fullscreen #tracklist { display: none; }
 
-body.fullscreen #main { background: #000; }
+    body.fullscreen #main { background: #000; }
 
-body.fullscreen #player-area {
-  position: fixed;
-  inset: 0;
-  z-index: 400;
-  display: flex;
-  flex-direction: column;
-  background: #000;
-  transform: rotate(90deg);
-  transform-origin: center center;
-  width: 100dvh;
-  height: 100dvw;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%) rotate(90deg);
-}
+    body.fullscreen #player-area {
+      position: fixed;
+      inset: 0;
+      z-index: 400;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      width: 100dvh;
+      height: 100dvw;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(90deg);
+    }
 
-body.fullscreen #controls,
-body.fullscreen #timeline { opacity: 0; transition: opacity .3s; pointer-events: none; }
-body.fullscreen.show-controls #controls,
-body.fullscreen.show-controls #timeline { opacity: 1; pointer-events: auto; }
+    body.fullscreen #controls,
+    body.fullscreen #timeline {
+      opacity: 0;
+      transition: opacity .3s;
+      pointer-events: none;
+    }
+    body.fullscreen.show-controls #controls,
+    body.fullscreen.show-controls #timeline {
+      opacity: 1;
+      pointer-events: auto;
+    }
 
-.fullscreen-hint { display: none; }
-
-.exit-fullscreen-btn {
-  display: none;
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 410;
-  background: rgba(0,0,0,.5);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-dim);
-  padding: 6px 10px;
-  font-size: 11px;
-  cursor: pointer;
-  font-family: 'JetBrains Mono', monospace;
-}
-body.fullscreen .exit-fullscreen-btn { display: block; }
-
+    .exit-fullscreen-btn {
+      display: none;
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 410;
+      background: rgba(0,0,0,.6);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    body.fullscreen .exit-fullscreen-btn { display: block; }
     /* ── BLE接続画面 ── */
     #connect-screen { position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 999; }
     #connect-screen .connect-logo { font-size: 11px; font-weight: 800; letter-spacing: .3em; color: var(--accent); text-transform: uppercase; margin-bottom: 48px; }
@@ -861,34 +865,32 @@ body.fullscreen .exit-fullscreen-btn { display: block; }
     function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebar-overlay').classList.remove('open'); }
 
     function toggleFullscreen() {
-  document.body.classList.add('fullscreen');
-  showControlsTemporary();
-}
+      document.body.classList.add('fullscreen');
+      showControlsTemporary();
+    }
 
-function exitFullscreen() {
-  document.body.classList.remove('fullscreen', 'show-controls');
-}
+    function exitFullscreen() {
+      document.body.classList.remove('fullscreen', 'show-controls');
+    }
 
-function showControlsTemporary() {
-  document.body.classList.add('show-controls');
-  clearTimeout(controlsTimer);
-  controlsTimer = setTimeout(() => {
-    document.body.classList.remove('show-controls');
-  }, 3000);
-}
+    let controlsTimer = null;
+    function showControlsTemporary() {
+      document.body.classList.add('show-controls');
+      clearTimeout(controlsTimer);
+      controlsTimer = setTimeout(() => {
+        document.body.classList.remove('show-controls');
+      }, 3000);
+    }
 
-let controlsTimer = null;
+    document.getElementById('video-wrap').addEventListener('click', () => {
+      if (document.body.classList.contains('fullscreen')) {
+        showControlsTemporary();
+      }
+    });
+
     document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && document.body.classList.contains('fullscreen')) {
-    exitFullscreen();
-  }
-});
-
-document.getElementById('video-wrap').addEventListener('click', () => {
-  if (document.body.classList.contains('fullscreen')) {
-    showControlsTemporary();
-  }
-});
+      if (e.key === 'Escape') exitFullscreen();
+    });
 
     function toggleMode() {
       const btn   = document.getElementById('modeBtn');
