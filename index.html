@@ -126,26 +126,12 @@
     .mode-badge:hover { border-color: var(--accent); color: var(--accent); }
     .mode-badge.active { border-color: var(--success); color: var(--success); background: rgba(79,255,176,.08); }
 
-    /* ── 全画面 ── */
+   /* ── 全画面 ── */
     body.fullscreen #sidebar,
     body.fullscreen #topbar,
     body.fullscreen #tracklist { display: none; }
 
     body.fullscreen #main { background: #000; }
-
-    body.fullscreen #player-area {
-      position: fixed;
-      inset: 0;
-      z-index: 400;
-      background: #000;
-      display: flex;
-      flex-direction: column;
-      width: 100dvh;
-      height: 100dvw;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%) rotate(90deg);
-    }
 
     body.fullscreen #controls,
     body.fullscreen #timeline {
@@ -175,6 +161,23 @@
       font-family: 'JetBrains Mono', monospace;
     }
     body.fullscreen .exit-fullscreen-btn { display: block; }
+
+    /* スマホのみ横回転 */
+    @media (max-width: 768px) {
+      body.fullscreen #player-area {
+        position: fixed;
+        inset: 0;
+        z-index: 400;
+        background: #000;
+        display: flex;
+        flex-direction: column;
+        width: 100dvh;
+        height: 100dvw;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%) rotate(90deg);
+      }
+    }
     /* ── BLE接続画面 ── */
     #connect-screen { position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 999; }
     #connect-screen .connect-logo { font-size: 11px; font-weight: 800; letter-spacing: .3em; color: var(--accent); text-transform: uppercase; margin-bottom: 48px; }
