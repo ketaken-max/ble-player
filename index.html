@@ -381,13 +381,15 @@
     function skipConnect() { enterMain(null); }
 
     function enterMain(deviceName) {
-      document.getElementById('connect-screen').classList.add('hidden');
-      if (deviceName) {
-        document.getElementById('bleLabel').textContent = deviceName + ' 接続済';
-        document.getElementById('bleDot').classList.remove('disconnected');
-      } else {
-        document.getElementById('bleLabel').textContent = '未接続（テスト）';
-      }
+  document.getElementById('connect-screen').classList.add('hidden');
+  if (deviceName) {
+    document.getElementById('bleLabel').textContent = deviceName + ' 接続済';
+    document.getElementById('bleDot').classList.remove('disconnected');
+  } else {
+    document.getElementById('bleLabel').textContent = '未接続（テスト）';
+  }
+  // 自動でフォルダ選択ダイアログを開く
+  document.getElementById('addFolderBtn').click();
     }
 
     function onDisconnected() {
