@@ -85,8 +85,8 @@
     .no-media { display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--text-dim); }
     .no-media .icon { font-size: 48px; opacity: .3; }
     .no-media p { font-size: 12px; font-family: 'JetBrains Mono', monospace; letter-spacing: .1em; }
-    .fullscreen-btn { position: absolute; top: 12px; right: 12px; background: rgba(0,0,0,.5); border: 1px solid var(--border); border-radius: 6px; color: var(--text-dim); padding: 6px 10px; font-size: 11px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all .15s; }
-    <button class="exit-fullscreen-btn" onclick="exitFullscreen()">✕ 全画面終了</button>
+    .fullscreen-btn<button class="exit-fullscreen-btn" onclick="exitFullscreen()">✕ 全画面終了</button> { position: absolute; top: 12px; right: 12px; background: rgba(0,0,0,.5); border: 1px solid var(--border); border-radius: 6px; color: var(--text-dim); padding: 6px 10px; font-size: 11px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all .15s; }
+    
     .fullscreen-hint { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); font-family: 'JetBrains Mono', monospace; font-size: 10px; color: rgba(255,255,255,.3); letter-spacing: .1em; pointer-events: none; opacity: 0; transition: opacity .3s; }
     body.fullscreen .fullscreen-hint { opacity: 1; }
 
