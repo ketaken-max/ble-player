@@ -954,6 +954,12 @@ if (sessionStorage.getItem('editor-track')) {
     // ══════════════════════════════
     //  初期化
     // ══════════════════════════════
+    // 編集画面から戻ってきた場合は接続画面をスキップ
+    if (sessionStorage.getItem('editor-work-id')) {
+      sessionStorage.removeItem('editor-work-id');
+      document.getElementById('connect-screen').classList.add('hidden');
+    }
+    
     loadLibraryFromStorage();
     renderLibrarySidebar();
   </script>
