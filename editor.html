@@ -289,18 +289,37 @@
     let workId     = null;
 
     // ══════════════════════════════
+    //  IndexedDB
+    // ══════════════════════════════
+    function openIDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open('ble-player', 1);
+        req.onupgradeneeded = (e) => e.target.result.createObjectStore('files');
+        req.onsuccess  = (e) => resolve(e.target.result);
+        req.onerror    = (e) => reject(e);
+      });
+    }
+
+    async function loadFileFromIDB(key) {
+      const db = await openIDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('files', 'readonly');
+        const req = tx.objectStore('files').get(key);
+        req.onsuccess = (e) => resolve(e.target.result || null);
+        req.onerror   = reject;
+      });
+    }
+
+    // ══════════════════════════════
     //  初期化
     // ══════════════════════════════
-    (function init() {
+    (async function init() {
       loadPatternsFromStorage();
 
       trackName = sessionStorage.getItem('editor-track') || '-';
       workId    = sessionStorage.getItem('editor-work-id') || null;
-      const mode    = sessionStorage.getItem('editor-mode') || 'new';
-      const csvText = sessionStorage.getItem('editor-csv-text') || null;
-      const mediaB64  = sessionStorage.getItem('editor-media-b64')  || null;
-      const mediaName = sessionStorage.getItem('editor-media-name') || null;
-      const mediaType = sessionStorage.getItem('editor-media-type') || 'video/mp4';
+      const mode          = sessionStorage.getItem('editor-mode') || 'new';
+      const csvText       = sessionStorage.getItem('editor-csv-text') || null;
       const storedCsvName = sessionStorage.getItem('editor-csv-name') || null;
 
       document.getElementById('trackNameDisplay').textContent = trackName;
@@ -313,20 +332,19 @@
         csvName = (trackName || 'new') + '.csv';
       }
 
-      // メディア復元
-      if (mediaB64 && mediaName) {
-        const bin  = atob(mediaB64);
-        const buf  = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-        mediaFile = new File([buf], mediaName, { type: mediaType });
-        loadMedia(mediaFile);
-      }
+      // メディアをIndexedDBから取得
+      const file = await loadFileFromIDB('editor-media');
+      if (file) { mediaFile = file; loadMedia(file); }
 
       // CSV復元
       if (csvText && (mode === 'existing' || mode === 'copy')) {
         parseCSV(csvText);
         renderRows();
-        renderTimeline();
+        if (file) {
+          player.addEventListener('loadedmetadata', renderTimeline, { once: true });
+        } else {
+          renderTimeline();
+        }
       }
     })();
 
