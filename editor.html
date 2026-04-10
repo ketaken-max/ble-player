@@ -400,10 +400,21 @@
 
     player.addEventListener('ended', () => { document.getElementById('playBtn').textContent = '▶'; });
 
-    document.getElementById('seekbar').addEventListener('click', (e) => {
-      const rect = e.currentTarget.getBoundingClientRect();
-      player.currentTime = ((e.clientX - rect.left) / rect.width) * (player.duration || 0);
-    });
+    (function() {
+      const sb = document.getElementById('seekbar');
+      let seeking = false;
+      function seek(clientX) {
+        const rect  = sb.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        player.currentTime = ratio * (player.duration || 0);
+      }
+      sb.addEventListener('mousedown',  (e) => { seeking=true; seek(e.clientX); });
+      document.addEventListener('mousemove',  (e) => { if(seeking) seek(e.clientX); });
+      document.addEventListener('mouseup',    ()  => { seeking=false; });
+      sb.addEventListener('touchstart', (e) => { seeking=true; seek(e.touches[0].clientX); }, {passive:true});
+      sb.addEventListener('touchmove',  (e) => { if(seeking){ e.preventDefault(); seek(e.touches[0].clientX); } }, {passive:false});
+      sb.addEventListener('touchend',   ()  => { seeking=false; });
+    })();
 
     document.getElementById('playBtn').addEventListener('click', () => {
       if (player.paused) { player.play(); document.getElementById('playBtn').textContent = '⏸'; }
