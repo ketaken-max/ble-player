@@ -244,6 +244,22 @@
     </div>
   </div>
 
+  <!-- CSV選択モーダル -->
+  <div id="csv-select-modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:800;display:flex;align-items:center;justify-content:center;padding:20px;">
+    <div class="modal-box">
+      <h2>CSV編集</h2>
+      <p class="modal-subtitle" id="csv-select-track"></p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:20px;">
+        <button class="modal-btn primary" id="csvSelectExisting" onclick="goToEditor('existing')">既存CSVを編集</button>
+        <button class="modal-btn primary" onclick="goToEditor('new')">新規作成</button>
+        <button class="modal-btn primary" id="csvSelectCopy" onclick="goToEditor('copy')">コピーして編集</button>
+      </div>
+      <div class="modal-btns" style="margin-top:16px;">
+        <button class="modal-btn cancel" onclick="document.getElementById('csv-select-modal').classList.add('hidden')">キャンセル</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ドロップゾーン -->
   <div id="drop-zone">フォルダをドロップ</div>
 
@@ -293,7 +309,8 @@
           <h2 id="work-title-display">作品を選択してください</h2>
           <span class="rj" id="work-rj-display"></span>
           <span class="circle" id="work-circle-display"></span>
-          <button class="edit-btn" id="editMetaBtn" style="display:none" onclick="openEditMeta()">編集</button>
+          <button class="edit-btn" id="editMetaBtn" style="display:none" onclick="openEditMeta()">情報編集</button>
+          <button class="edit-btn" id="editCsvBtn" style="display:none" onclick="openCsvSelect()">CSV編集</button>
         </div>
         <div class="tracks" id="tracksEl"></div>
       </div>
@@ -682,7 +699,8 @@
       document.getElementById('work-title-display').textContent  = w.title;
       document.getElementById('work-rj-display').textContent     = w.rj;
       document.getElementById('work-circle-display').textContent = [w.circle, w.cv].filter(Boolean).join('／');
-      document.getElementById('editMetaBtn').style.display       = 'inline-block';
+      document.getElementById('editMetaBtn').style.display = 'inline-block';
+      document.getElementById('editCsvBtn').style.display  = 'inline-block';
 
       const tracksEl = document.getElementById('tracksEl');
       tracksEl.innerHTML = '';
@@ -866,6 +884,50 @@
       idx = (idx + 1) % modes.length;
       btn.textContent = modes[idx];
       btn.classList.toggle('active', idx === 0);
+    }
+
+    // ══════════════════════════════
+    //  CSV編集遷移
+    // ══════════════════════════════
+    function openCsvSelect() {
+      if (!currentWorkId || !currentTrack) return;
+      const hasCsv = !!csvFiles[currentTrack];
+      document.getElementById('csv-select-track').textContent = '対象: ' + currentTrack;
+      document.getElementById('csvSelectExisting').style.display = hasCsv ? 'block' : 'none';
+      document.getElementById('csvSelectCopy').style.display     = hasCsv ? 'block' : 'none';
+      document.getElementById('csv-select-modal').classList.remove('hidden');
+    }
+
+    async function goToEditor(mode) {
+      document.getElementById('csv-select-modal').classList.add('hidden');
+      const mediaFile = mediaFiles[currentTrack];
+      const csvFile   = csvFiles[currentTrack];
+
+      // sessionStorageにデータを渡す
+      sessionStorage.setItem('editor-track',    currentTrack);
+      sessionStorage.setItem('editor-mode',     mode);
+      sessionStorage.setItem('editor-work-id',  currentWorkId);
+
+      // ファイルをbase64で渡す（メディア）
+      if (mediaFile) {
+        const buf  = await mediaFile.arrayBuffer();
+        const b64  = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        sessionStorage.setItem('editor-media-name', mediaFile.name);
+        sessionStorage.setItem('editor-media-type', mediaFile.type);
+        sessionStorage.setItem('editor-media-b64',  b64);
+      }
+
+      // CSVテキストを渡す
+      if (csvFile && (mode === 'existing' || mode === 'copy')) {
+        const text = await csvFile.text();
+        sessionStorage.setItem('editor-csv-text', text);
+        sessionStorage.setItem('editor-csv-name', csvFile.name);
+      } else {
+        sessionStorage.removeItem('editor-csv-text');
+        sessionStorage.removeItem('editor-csv-name');
+      }
+
+      window.location.href = 'editor.html';
     }
 
     // ══════════════════════════════
