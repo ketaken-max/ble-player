@@ -400,6 +400,7 @@
 
     player.addEventListener('ended', () => { document.getElementById('playBtn').textContent = '▶'; });
 
+    // seekbarスライド操作
     (function() {
       const sb = document.getElementById('seekbar');
       let seeking = false;
@@ -429,28 +430,15 @@
     // ══════════════════════════════
     //  タイムライン
     // ══════════════════════════════
-    (function() {
-  const tlSection = document.getElementById('tl-section');
-  const tlTrack   = document.getElementById('tl-track');
-  let sliding = false;
-
-  function setTime(e) {
-    const rect    = tlTrack.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const ratio   = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const dur     = player.duration || 0;
-    const sec     = dur ? ratio * dur : 0;
-    document.getElementById('inputTime').value = sec.toFixed(1);
-    player.currentTime = sec;
-  }
-
-  tlSection.addEventListener('mousedown',  (e) => { sliding=true; setTime(e); });
-  tlSection.addEventListener('mousemove',  (e) => { if(sliding) setTime(e); });
-  tlSection.addEventListener('mouseup',    ()  => { sliding=false; });
-  tlSection.addEventListener('touchstart', (e) => { sliding=true; setTime(e); }, {passive:true});
-  tlSection.addEventListener('touchmove',  (e) => { if(sliding) setTime(e); }, {passive:true});
-  tlSection.addEventListener('touchend',   ()  => { sliding=false; });
-})();
+    document.getElementById('tl-section').addEventListener('click', (e) => {
+      const track = document.getElementById('tl-track');
+      const rect  = track.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const dur   = player.duration || 0;
+      const sec   = dur ? ratio * dur : 0;
+      document.getElementById('inputTime').value = sec.toFixed(1);
+      player.currentTime = sec;
+    });
 
     function renderTimeline() {
       const track = document.getElementById('tl-track');
