@@ -407,20 +407,24 @@
       function seek(clientX) {
         const rect  = sb.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        const dur   = player.duration || 0;
+        document.getElementById('seekbarFill').style.width = (ratio*100) + '%';
+        document.getElementById('tlPlayhead').style.left   = (ratio*100) + '%';
+        document.getElementById('timecur').textContent     = formatTime(ratio * dur);
+      }
+      function commitSeek(clientX) {
+        const rect  = sb.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
         player.currentTime = ratio * (player.duration || 0);
+        seeking = false;
       }
       sb.addEventListener('mousedown',  (e) => { seeking=true; seek(e.clientX); });
       document.addEventListener('mousemove',  (e) => { if(seeking) seek(e.clientX); });
-      document.addEventListener('mouseup',    ()  => { seeking=false; });
+      document.addEventListener('mouseup',    (e) => { if(seeking) commitSeek(e.clientX); seeking=false; });
       sb.addEventListener('touchstart', (e) => { seeking=true; seek(e.touches[0].clientX); }, {passive:true});
       sb.addEventListener('touchmove',  (e) => { if(seeking){ e.preventDefault(); seek(e.touches[0].clientX); } }, {passive:false});
-      sb.addEventListener('touchend',   ()  => { seeking=false; });
+      sb.addEventListener('touchend',   (e) => { if(seeking) commitSeek(e.changedTouches[0].clientX); seeking=false; });
     })();
-
-    document.getElementById('playBtn').addEventListener('click', () => {
-      if (player.paused) { player.play(); document.getElementById('playBtn').textContent = '⏸'; }
-      else               { player.pause(); document.getElementById('playBtn').textContent = '▶'; }
-    });
 
     function formatTime(sec) {
       const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
