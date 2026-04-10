@@ -746,10 +746,24 @@ if (sessionStorage.getItem('editor-track')) {
     player.addEventListener('play',   () => { lastSentIndex=-1; });
     player.addEventListener('seeked', () => { lastSentIndex=-1; });
 
-    document.getElementById('seekbar').addEventListener('click', (e) => {
-      const rect = e.currentTarget.getBoundingClientRect();
-      player.currentTime = ((e.clientX-rect.left)/rect.width)*(player.duration||0);
-    });
+    (function() {
+  const seekbar = document.getElementById('seekbar');
+  let seeking = false;
+
+  function seek(e) {
+    const rect  = seekbar.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    player.currentTime = ratio * (player.duration || 0);
+  }
+
+  seekbar.addEventListener('mousedown',  (e) => { seeking=true; seek(e); });
+  seekbar.addEventListener('mousemove',  (e) => { if(seeking) seek(e); });
+  seekbar.addEventListener('mouseup',    ()  => { seeking=false; });
+  seekbar.addEventListener('touchstart', (e) => { seeking=true; seek(e); }, {passive:true});
+  seekbar.addEventListener('touchmove',  (e) => { if(seeking) seek(e); }, {passive:true});
+  seekbar.addEventListener('touchend',   ()  => { seeking=false; });
+})();
 
     document.getElementById('playBtn').addEventListener('click', () => {
       if (player.paused) { player.play(); document.getElementById('playBtn').textContent='⏸'; }
