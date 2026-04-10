@@ -691,8 +691,9 @@
     // ══════════════════════════════
     //  作品・トラック選択
     // ══════════════════════════════
-    let currentWorkId = null, trackList = [], currentTrackIndex = 0, isLoopAll = false;
-
+    let currentWorkId = null, currentTrack = null, trackList = [], currentTrackIndex = 0, isLoopAll = false;
+    currentTrack = base;  //
+    
     function selectWork(workId) {
       currentWorkId = workId;
       const w = library[workId];
