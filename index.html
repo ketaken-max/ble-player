@@ -747,15 +747,20 @@ if (sessionStorage.getItem('editor-track')) {
     player.addEventListener('seeked', () => { lastSentIndex=-1; });
 
     (function() {
-  const seekbar = document.getElementById('seekbar');
-  let seeking = false;
-
-  function seek(e) {
-    const rect  = seekbar.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    player.currentTime = ratio * (player.duration || 0);
-  }
+      const sb = document.getElementById('seekbar');
+      let seeking = false;
+      function seek(clientX) {
+        const rect  = sb.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        player.currentTime = ratio * (player.duration || 0);
+      }
+      sb.addEventListener('mousedown',  (e) => { seeking=true; seek(e.clientX); });
+      document.addEventListener('mousemove',  (e) => { if(seeking) seek(e.clientX); });
+      document.addEventListener('mouseup',    ()  => { seeking=false; });
+      sb.addEventListener('touchstart', (e) => { seeking=true; seek(e.touches[0].clientX); }, {passive:true});
+      sb.addEventListener('touchmove',  (e) => { if(seeking){ e.preventDefault(); seek(e.touches[0].clientX); } }, {passive:false});
+      sb.addEventListener('touchend',   ()  => { seeking=false; });
+    })();
 
   seekbar.addEventListener('mousedown',  (e) => { seeking=true; seek(e); });
   seekbar.addEventListener('mousemove',  (e) => { if(seeking) seek(e); });
@@ -827,6 +832,23 @@ if (sessionStorage.getItem('editor-track')) {
       const marks=document.querySelectorAll('.tl-time-mark'), count=marks.length-1;
       marks.forEach((mark,i) => { mark.textContent=formatTime(dur/count*i); });
     }
+
+    // タイムラインのスライド操作
+    (function() {
+      const tl = document.getElementById('tlTrack');
+      let sliding = false;
+      function seekFromTl(clientX) {
+        const rect  = tl.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        player.currentTime = ratio * (player.duration || 0);
+      }
+      tl.addEventListener('mousedown',  (e) => { sliding=true; seekFromTl(e.clientX); });
+      document.addEventListener('mousemove',  (e) => { if(sliding) seekFromTl(e.clientX); });
+      document.addEventListener('mouseup',    ()  => { sliding=false; });
+      tl.addEventListener('touchstart', (e) => { sliding=true; seekFromTl(e.touches[0].clientX); }, {passive:true});
+      tl.addEventListener('touchmove',  (e) => { if(sliding){ e.preventDefault(); seekFromTl(e.touches[0].clientX); } }, {passive:false});
+      tl.addEventListener('touchend',   ()  => { sliding=false; });
+    })();
 
     function processBLESchedule(currentMs) {
       if (!schedule.length) return;
