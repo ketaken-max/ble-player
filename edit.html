@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>CSV Editor - BLE Player</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:#0a0a0f; --bg2:#12121a; --bg3:#1a1a26; --border:#2a2a3d;
+      --accent:#7c6aff; --accent2:#ff6ab0; --text:#e8e8f0; --text-dim:#6a6a8a;
+      --success:#4fffb0; --warning:#ffb74d;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Syne', sans-serif; background: var(--bg); color: var(--text); height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
+
+    /* ── トップバー ── */
+    #topbar { height: 48px; background: var(--bg2); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 12px; flex-shrink: 0; }
+    #hamburger { background: transparent; border: none; color: var(--text); font-size: 20px; cursor: pointer; padding: 4px 8px; line-height: 1; }
+    #topbar .logo { font-size: 13px; font-weight: 800; letter-spacing: .2em; color: var(--accent2); text-transform: uppercase; }
+    #topbar .track-name { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .top-btn { padding: 6px 14px; border-radius: 6px; border: none; font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 600; cursor: pointer; transition: all .15s; }
+    .top-btn.primary { background: var(--accent); color: #fff; }
+    .top-btn.primary:hover { background: #9d8fff; }
+    .top-btn.secondary { background: var(--bg3); color: var(--text-dim); border: 1px solid var(--border); }
+    .top-btn.secondary:hover { color: var(--text); }
+    .top-btn.danger { background: transparent; color: var(--accent2); border: 1px solid var(--accent2); }
+
+    /* ── サイドバー（ファイル読み込み用） ── */
+    #sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 200; }
+    #sidebar-overlay.open { display: block; }
+    #sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 300; width: 260px; background: var(--bg2); border-right: 1px solid var(--border); transform: translateX(-100%); transition: transform .25s ease; display: flex; flex-direction: column; }
+    #sidebar.open { transform: translateX(0); }
+    .sidebar-title { padding: 16px; font-size: 12px; font-weight: 700; border-bottom: 1px solid var(--border); }
+    .sidebar-content { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .btn-outline { width: 100%; padding: 8px; background: transparent; border: 1px dashed var(--border); border-radius: 6px; color: var(--text-dim); font-family: 'Syne', sans-serif; font-size: 11px; cursor: pointer; transition: all .15s; }
+    .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── メインレイアウト ── */
+    #editor-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    /* ── プレイヤー ── */
+    #player-section { background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    #video-wrap { background: #000; display: flex; align-items: center; justify-content: center; height: 180px; position: relative; }
+    #video-wrap video { max-width: 100%; max-height: 100%; }
+    .no-media { display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--text-dim); }
+    .no-media .icon { font-size: 32px; opacity: .3; }
+    .no-media p { font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+
+    #player-controls { padding: 8px 16px 10px; }
+    .time-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .time-display { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+    .seekbar { flex: 1; height: 4px; background: var(--bg3); border-radius: 2px; cursor: pointer; position: relative; }
+    .seekbar-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 2px; position: relative; }
+    .seekbar-fill::after { content: ''; position: absolute; right: -5px; top: -4px; width: 12px; height: 12px; background: var(--accent); border-radius: 50%; }
+    .ctrl-row { display: flex; align-items: center; gap: 8px; }
+    .play-btn { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); border: none; color: #fff; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .icon-btn { background: transparent; border: none; color: var(--text-dim); font-size: 14px; cursor: pointer; padding: 4px 6px; border-radius: 4px; transition: all .15s; }
+    .icon-btn:hover { color: var(--text); }
+
+    /* ── タイムライン ── */
+    #tl-section { height: 60px; background: var(--bg2); border-bottom: 1px solid var(--border); position: relative; flex-shrink: 0; cursor: crosshair; }
+    .tl-label { position: absolute; top: 4px; left: 12px; font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; pointer-events: none; }
+    #tl-track { position: absolute; top: 18px; left: 12px; right: 12px; height: 22px; background: var(--bg3); border-radius: 4px; border: 1px solid var(--border); overflow: visible; }
+    .tl-playhead { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--accent); left: 0%; box-shadow: 0 0 6px var(--accent); pointer-events: none; }
+    .tl-marker { position: absolute; bottom: 2px; width: 2px; border-radius: 1px; transform: translateX(-50%); cursor: pointer; }
+    .tl-marker.dir0 { background: var(--accent); }
+    .tl-marker.dir1 { background: var(--accent2); }
+    .tl-time-marks { position: absolute; bottom: 3px; left: 12px; right: 12px; display: flex; justify-content: space-between; pointer-events: none; }
+    .tl-time-mark { font-family: 'JetBrains Mono', monospace; font-size: 9px; color: var(--text-dim); }
+
+    /* ── 入力エリア ── */
+    #input-section { padding: 10px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex-shrink: 0; }
+    .input-group { display: flex; align-items: center; gap: 6px; }
+    .input-label { font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); flex-shrink: 0; }
+    .input-field { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); outline: none; width: 80px; }
+    .input-field:focus { border-color: var(--accent); }
+    .dir-btn { padding: 5px 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg3); color: var(--text-dim); font-family: 'JetBrains Mono', monospace; font-size: 11px; cursor: pointer; transition: all .15s; }
+    .dir-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(124,106,255,.12); }
+    .str-slider { -webkit-appearance: none; width: 100px; height: 4px; border-radius: 2px; background: var(--bg3); outline: none; cursor: pointer; }
+    .str-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--accent2); cursor: pointer; }
+    .str-value { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent2); width: 28px; text-align: right; }
+    .add-btn { padding: 6px 16px; background: var(--accent); border: none; border-radius: 6px; color: #fff; font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 600; cursor: pointer; transition: all .15s; flex-shrink: 0; }
+    .add-btn:hover { background: #9d8fff; }
+    .now-btn { padding: 5px 8px; background: transparent; border: 1px solid var(--border); border-radius: 4px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; font-size: 10px; cursor: pointer; transition: all .15s; white-space: nowrap; }
+    .now-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── ツールバー ── */
+    #toolbar { padding: 6px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+    .tool-btn { padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg3); color: var(--text-dim); font-family: 'JetBrains Mono', monospace; font-size: 10px; cursor: pointer; transition: all .15s; }
+    .tool-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .tool-btn.warn:hover { border-color: var(--accent2); color: var(--accent2); }
+
+    /* ── 行一覧 ── */
+    #row-list { flex: 1; overflow-y: auto; }
+    #row-list::-webkit-scrollbar { width: 4px; }
+    #row-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .row-header { display: grid; grid-template-columns: 80px 60px 60px 1fr 32px; gap: 0; padding: 6px 16px; background: var(--bg3); border-bottom: 1px solid var(--border); font-size: 9px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); letter-spacing: .08em; text-transform: uppercase; position: sticky; top: 0; }
+    .csv-row { display: grid; grid-template-columns: 80px 60px 60px 1fr 32px; gap: 0; padding: 6px 16px; border-bottom: 1px solid rgba(42,42,61,.5); align-items: center; transition: background .1s; }
+    .csv-row:hover { background: var(--bg3); }
+    .csv-row.selected { background: rgba(124,106,255,.1); border-left: 2px solid var(--accent); }
+    .csv-row span { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+    .csv-row .dir-tag { font-size: 9px; padding: 2px 6px; border-radius: 3px; }
+    .csv-row .dir-tag.d0 { background: rgba(124,106,255,.15); color: var(--accent); }
+    .csv-row .dir-tag.d1 { background: rgba(255,106,176,.15); color: var(--accent2); }
+    .str-bar { height: 4px; border-radius: 2px; background: var(--accent); }
+    .del-btn { background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; padding: 2px; transition: color .15s; }
+    .del-btn:hover { color: var(--accent2); }
+
+    /* ── パターンモーダル ── */
+    #pattern-modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 800; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    #pattern-modal.hidden { display: none; }
+    .modal-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: 100%; max-width: 400px; max-height: 70dvh; overflow-y: auto; }
+    .modal-box h3 { font-size: 14px; font-weight: 700; margin-bottom: 16px; }
+    .pattern-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 8px; cursor: pointer; transition: all .15s; }
+    .pattern-item:hover { border-color: var(--accent); background: rgba(124,106,255,.08); }
+    .pattern-item .p-name { flex: 1; font-size: 12px; }
+    .pattern-item .p-count { font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); }
+    .pattern-del { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 12px; }
+    .pattern-del:hover { color: var(--accent2); }
+    .modal-input { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text); outline: none; margin-bottom: 10px; }
+    .modal-input:focus { border-color: var(--accent); }
+    .modal-btn-row { display: flex; gap: 8px; }
+    .modal-btn { flex: 1; padding: 9px; border-radius: 6px; font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 600; cursor: pointer; border: none; transition: all .15s; }
+    .modal-btn.primary { background: var(--accent); color: #fff; }
+    .modal-btn.cancel { background: var(--bg3); color: var(--text-dim); }
+
+    /* ── 加工モーダル ── */
+    #process-modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 800; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    #process-modal.hidden { display: none; }
+    .process-field { margin-bottom: 12px; }
+    .process-field label { display: block; font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; }
+    .process-input { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text); outline: none; }
+    .process-input:focus { border-color: var(--accent); }
+
+    /* スマホ */
+    @media (max-width: 768px) {
+      #video-wrap { height: 130px; }
+      #input-section { gap: 8px; }
+      .str-slider { width: 80px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- サイドバーオーバーレイ -->
+  <div id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+  <!-- サイドバー -->
+  <div id="sidebar">
+    <div class="sidebar-title">ファイル読み込み</div>
+    <div class="sidebar-content">
+      <button class="btn-outline" id="loadMediaBtn">▶ 音声・動画を読み込む</button>
+      <button class="btn-outline" id="loadCsvBtn">📄 CSVを読み込む</button>
+      <button class="btn-outline" onclick="window.location.href='index.html'">← メイン画面に戻る</button>
+    </div>
+  </div>
+
+  <!-- パターンモーダル -->
+  <div id="pattern-modal" class="hidden">
+    <div class="modal-box">
+      <h3 id="pattern-modal-title">パターン</h3>
+      <div id="pattern-list"></div>
+      <div id="pattern-save-area" style="margin-top:12px; border-top:1px solid var(--border); padding-top:12px;">
+        <input class="modal-input" type="text" id="pattern-name-input" placeholder="パターン名を入力">
+        <div class="modal-btn-row">
+          <button class="modal-btn cancel" onclick="closePatternModal()">閉じる</button>
+          <button class="modal-btn primary" onclick="savePattern()">現在のCSVを登録</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 加工モーダル -->
+  <div id="process-modal" class="hidden">
+    <div class="modal-box">
+      <h3 id="process-title">加工</h3>
+      <div id="process-fields"></div>
+      <div class="modal-btn-row" style="margin-top:16px;">
+        <button class="modal-btn cancel" onclick="document.getElementById('process-modal').classList.add('hidden')">キャンセル</button>
+        <button class="modal-btn primary" id="process-apply-btn">適用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- トップバー -->
+  <div id="topbar">
+    <button id="hamburger" onclick="openSidebar()">☰</button>
+    <span class="logo">Editor</span>
+    <span class="track-name" id="trackNameDisplay">-</span>
+    <button class="top-btn secondary" onclick="undoAction()">↩ Undo</button>
+    <button class="top-btn secondary" onclick="exportCSV()">書出</button>
+    <button class="top-btn primary" onclick="saveCSV()">保存</button>
+  </div>
+
+  <div id="editor-main">
+
+    <!-- プレイヤー -->
+    <div id="player-section">
+      <div id="video-wrap">
+        <div class="no-media">
+          <div class="icon">▶</div>
+          <p>ファイルを読み込んでください</p>
+        </div>
+        <video id="media-player" style="display:none; max-width:100%; max-height:100%;"></video>
+      </div>
+      <div id="player-controls">
+        <div class="time-row">
+          <span class="time-display" id="timecur">00:00</span>
+          <div class="seekbar" id="seekbar"><div class="seekbar-fill" id="seekbarFill"></div></div>
+          <span class="time-display" id="timedur">00:00</span>
+        </div>
+        <div class="ctrl-row">
+          <button class="play-btn" id="playBtn">▶</button>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-dim);margin-left:8px;">タイムラインをタップして時間を入力</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- タイムライン -->
+    <div id="tl-section">
+      <span class="tl-label">タイムライン（タップで時間入力）</span>
+      <div id="tl-track">
+        <div class="tl-playhead" id="tlPlayhead"></div>
+      </div>
+      <div class="tl-time-marks" id="tlTimeMarks">
+        <span class="tl-time-mark">0:00</span>
+        <span class="tl-time-mark">-</span>
+        <span class="tl-time-mark">-</span>
+        <span class="tl-time-mark">-</span>
+        <span class="tl-time-mark">-</span>
+      </div>
+    </div>
+
+    <!-- 入力エリア -->
+    <div id="input-section">
+      <div class="input-group">
+        <span class="input-label">時間(秒)</span>
+        <input class="input-field" type="number" id="inputTime" step="0.1" min="0" placeholder="0.0">
+        <button class="now-btn" onclick="setCurrentTime()">現在</button>
+      </div>
+      <div class="input-group">
+        <span class="input-label">向き</span>
+        <button class="dir-btn active" id="dirBtn0" onclick="setDir(0)">右(0)</button>
+        <button class="dir-btn" id="dirBtn1" onclick="setDir(1)">左(1)</button>
+        <input class="input-field" type="number" id="inputDir" min="0" max="1" value="0" style="width:48px;" oninput="syncDirBtn()">
+      </div>
+      <div class="input-group">
+        <span class="input-label">強さ</span>
+        <input type="range" class="str-slider" id="strSlider" min="0" max="100" value="50" oninput="document.getElementById('inputStr').value=this.value">
+        <input class="input-field" type="number" id="inputStr" min="0" max="100" value="50" style="width:52px;" oninput="document.getElementById('strSlider').value=this.value">
+      </div>
+      <button class="add-btn" onclick="addRow()">＋ 追加</button>
+    </div>
+
+    <!-- ツールバー -->
+    <div id="toolbar">
+      <button class="tool-btn" onclick="openPatternModal()">パターン</button>
+      <button class="tool-btn" onclick="openProcess('mirror')">ミラーリング</button>
+      <button class="tool-btn" onclick="openProcess('repeat')">繰り返し</button>
+      <button class="tool-btn" onclick="openProcess('fadein')">フェードイン</button>
+      <button class="tool-btn" onclick="openProcess('fadeout')">フェードアウト</button>
+      <button class="tool-btn warn" onclick="clearAll()">全削除</button>
+    </div>
+
+    <!-- 行一覧 -->
+    <div class="row-header">
+      <span>時間(秒)</span>
+      <span>向き</span>
+      <span>強さ</span>
+      <span>強さ(棒)</span>
+      <span></span>
+    </div>
+    <div id="row-list"></div>
+
+  </div>
+
+  <script>
+    // ══════════════════════════════
+    //  状態
+    // ══════════════════════════════
+    let schedule  = [];  // [{time_ms, direction, strength}] ※内部はデシ秒
+    let undoStack = [];
+    let patterns  = {};
+    let currentDir = 0;
+    let mediaFile  = null;
+    let csvName    = 'new.csv';
+    let trackName  = '-';
+    let workId     = null;
+
+    // ══════════════════════════════
+    //  初期化
+    // ══════════════════════════════
+    (function init() {
+      loadPatternsFromStorage();
+
+      trackName = sessionStorage.getItem('editor-track') || '-';
+      workId    = sessionStorage.getItem('editor-work-id') || null;
+      const mode    = sessionStorage.getItem('editor-mode') || 'new';
+      const csvText = sessionStorage.getItem('editor-csv-text') || null;
+      const mediaB64  = sessionStorage.getItem('editor-media-b64')  || null;
+      const mediaName = sessionStorage.getItem('editor-media-name') || null;
+      const mediaType = sessionStorage.getItem('editor-media-type') || 'video/mp4';
+      const storedCsvName = sessionStorage.getItem('editor-csv-name') || null;
+
+      document.getElementById('trackNameDisplay').textContent = trackName;
+
+      if (mode === 'copy') {
+        csvName = storedCsvName ? storedCsvName.replace(/\.csv$/, '_copy.csv') : 'copy.csv';
+      } else if (mode === 'existing' && storedCsvName) {
+        csvName = storedCsvName;
+      } else {
+        csvName = (trackName || 'new') + '.csv';
+      }
+
+      // メディア復元
+      if (mediaB64 && mediaName) {
+        const bin  = atob(mediaB64);
+        const buf  = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+        mediaFile = new File([buf], mediaName, { type: mediaType });
+        loadMedia(mediaFile);
+      }
+
+      // CSV復元
+      if (csvText && (mode === 'existing' || mode === 'copy')) {
+        parseCSV(csvText);
+        renderRows();
+        renderTimeline();
+      }
+    })();
+
+    // ══════════════════════════════
+    //  サイドバー
+    // ══════════════════════════════
+    function openSidebar()  { document.getElementById('sidebar').classList.add('open'); document.getElementById('sidebar-overlay').classList.add('open'); }
+    function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebar-overlay').classList.remove('open'); }
+
+    document.getElementById('loadMediaBtn').addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file'; input.accept = 'video/*,audio/*';
+      input.onchange = (e) => { if (e.target.files[0]) { mediaFile = e.target.files[0]; loadMedia(mediaFile); closeSidebar(); } };
+      input.click();
+    });
+
+    document.getElementById('loadCsvBtn').addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file'; input.accept = '.csv';
+      input.onchange = async (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        csvName = f.name;
+        const text = await f.text();
+        pushUndo();
+        parseCSV(text);
+        renderRows();
+        renderTimeline();
+        closeSidebar();
+      };
+      input.click();
+    });
+
+    // ══════════════════════════════
+    //  プレイヤー
+    // ══════════════════════════════
+    const player = document.getElementById('media-player');
+
+    function loadMedia(file) {
+      player.src = URL.createObjectURL(file);
+      player.load();
+      document.querySelector('.no-media').style.display = 'none';
+      player.style.display = 'block';
+    }
+
+    player.addEventListener('timeupdate', () => {
+      const cur = player.currentTime, dur = player.duration || 0;
+      document.getElementById('timecur').textContent     = formatTime(cur);
+      document.getElementById('timedur').textContent     = formatTime(dur);
+      document.getElementById('seekbarFill').style.width = (dur ? cur/dur*100 : 0) + '%';
+      document.getElementById('tlPlayhead').style.left   = (dur ? cur/dur*100 : 0) + '%';
+    });
+
+    player.addEventListener('ended', () => { document.getElementById('playBtn').textContent = '▶'; });
+
+    document.getElementById('seekbar').addEventListener('click', (e) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      player.currentTime = ((e.clientX - rect.left) / rect.width) * (player.duration || 0);
+    });
+
+    document.getElementById('playBtn').addEventListener('click', () => {
+      if (player.paused) { player.play(); document.getElementById('playBtn').textContent = '⏸'; }
+      else               { player.pause(); document.getElementById('playBtn').textContent = '▶'; }
+    });
+
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+      return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+    }
+
+    // ══════════════════════════════
+    //  タイムライン
+    // ══════════════════════════════
+    document.getElementById('tl-section').addEventListener('click', (e) => {
+      const track = document.getElementById('tl-track');
+      const rect  = track.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const dur   = player.duration || 0;
+      const sec   = dur ? ratio * dur : 0;
+      document.getElementById('inputTime').value = sec.toFixed(1);
+      player.currentTime = sec;
+    });
+
+    function renderTimeline() {
+      const track = document.getElementById('tl-track');
+      [...track.querySelectorAll('.tl-marker')].forEach(m => m.remove());
+      const dur = player.duration || 0;
+      const h   = track.clientHeight - 4;
+      schedule.forEach(row => {
+        const pct = dur ? (row.time_ms / 10 / dur * 100) : 0;
+        const m = document.createElement('div');
+        m.className = 'tl-marker dir' + row.direction;
+        m.style.left   = pct + '%';
+        m.style.height = Math.max(3, Math.round(row.strength / 100 * h)) + 'px';
+        m.title = formatTime(row.time_ms / 10) + ' 向き:' + row.direction + ' 強さ:' + row.strength;
+        m.addEventListener('click', (e) => {
+          e.stopPropagation();
+          document.getElementById('inputTime').value = (row.time_ms / 10).toFixed(1);
+          player.currentTime = row.time_ms / 10;
+        });
+        track.appendChild(m);
+      });
+      // 時間目盛り更新
+      const marks = document.querySelectorAll('.tl-time-mark');
+      const count = marks.length - 1;
+      marks.forEach((mark, i) => { mark.textContent = formatTime(dur / count * i); });
+    }
+
+    player.addEventListener('loadedmetadata', renderTimeline);
+
+    // ══════════════════════════════
+    //  入力操作
+    // ══════════════════════════════
+    function setDir(d) {
+      currentDir = d;
+      document.getElementById('inputDir').value  = d;
+      document.getElementById('dirBtn0').classList.toggle('active', d === 0);
+      document.getElementById('dirBtn1').classList.toggle('active', d === 1);
+    }
+
+    function syncDirBtn() {
+      const d = parseInt(document.getElementById('inputDir').value);
+      if (d === 0 || d === 1) setDir(d);
+    }
+
+    function setCurrentTime() {
+      document.getElementById('inputTime').value = player.currentTime.toFixed(1);
+    }
+
+    function addRow() {
+      const timeSec  = parseFloat(document.getElementById('inputTime').value);
+      const dir      = parseInt(document.getElementById('inputDir').value);
+      const strength = parseInt(document.getElementById('inputStr').value);
+
+      if (isNaN(timeSec) || timeSec < 0) { alert('時間を入力してください'); return; }
+      if (dir !== 0 && dir !== 1)         { alert('向きは0か1を入力してください'); return; }
+      if (isNaN(strength) || strength < 0 || strength > 100) { alert('強さは0〜100で入力してください'); return; }
+
+      pushUndo();
+      schedule.push({ time_ms: Math.round(timeSec * 10), direction: dir, strength });
+      schedule.sort((a, b) => a.time_ms - b.time_ms);
+      renderRows();
+      renderTimeline();
+    }
+
+    // ══════════════════════════════
+    //  行一覧
+    // ══════════════════════════════
+    function renderRows() {
+      const list = document.getElementById('row-list');
+      list.innerHTML = '';
+      schedule.forEach((row, i) => {
+        const div = document.createElement('div');
+        div.className = 'csv-row';
+        div.innerHTML = `
+          <span>${(row.time_ms / 10).toFixed(1)}</span>
+          <span><span class="dir-tag d${row.direction}">${row.direction === 0 ? '右(0)' : '左(1)'}</span></span>
+          <span>${row.strength}</span>
+          <span><div class="str-bar" style="width:${row.strength}%"></div></span>
+          <button class="del-btn" onclick="deleteRow(${i})">✕</button>`;
+        list.appendChild(div);
+      });
+    }
+
+    function deleteRow(i) {
+      pushUndo();
+      schedule.splice(i, 1);
+      renderRows();
+      renderTimeline();
+    }
+
+    function clearAll() {
+      if (!confirm('全行を削除しますか？')) return;
+      pushUndo();
+      schedule = [];
+      renderRows();
+      renderTimeline();
+    }
+
+    // ══════════════════════════════
+    //  Undo
+    // ══════════════════════════════
+    function pushUndo() { undoStack.push(JSON.stringify(schedule)); if (undoStack.length > 50) undoStack.shift(); }
+    function undoAction() {
+      if (!undoStack.length) return;
+      schedule = JSON.parse(undoStack.pop());
+      renderRows(); renderTimeline();
+    }
+
+    // ══════════════════════════════
+    //  CSV読み書き
+    // ══════════════════════════════
+    function parseCSV(text) {
+      const lines = text.trim().split('\n').slice(1);
+      schedule = lines.map(line => {
+        const [time_ms, direction, strength] = line.split(',').map(s => s.trim());
+        return { time_ms: parseInt(time_ms), direction: parseInt(direction), strength: parseInt(strength) };
+      }).filter(r => !isNaN(r.time_ms));
+      schedule.sort((a, b) => a.time_ms - b.time_ms);
+    }
+
+    function toCSVText() {
+      return 'time_ms,direction,strength\n' + schedule.map(r => `${r.time_ms},${r.direction},${r.strength}`).join('\n');
+    }
+
+    function exportCSV() {
+      const blob = new Blob([toCSVText()], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = csvName;
+      a.click();
+    }
+
+    function saveCSV() {
+      // sessionStorageに保存してメイン画面に伝える
+      sessionStorage.setItem('saved-csv-text',  toCSVText());
+      sessionStorage.setItem('saved-csv-track', trackName);
+      sessionStorage.setItem('saved-csv-name',  csvName);
+      alert('保存しました。メイン画面に戻ると反映されます。');
+    }
+
+    // ══════════════════════════════
+    //  加工機能
+    // ══════════════════════════════
+    function openProcess(type) {
+      const modal  = document.getElementById('process-modal');
+      const title  = document.getElementById('process-title');
+      const fields = document.getElementById('process-fields');
+      const applyBtn = document.getElementById('process-apply-btn');
+
+      if (type === 'mirror') {
+        title.textContent = 'ミラーリング';
+        fields.innerHTML  = '<p style="font-size:11px;color:var(--text-dim);font-family:\'JetBrains Mono\',monospace;">前半の動作を後半に向き反転でコピーします。実行するとCSVの末尾に追加されます。</p>';
+        applyBtn.onclick  = () => { applyMirror(); modal.classList.add('hidden'); };
+      } else if (type === 'repeat') {
+        title.textContent = '繰り返し';
+        fields.innerHTML  = `
+          <div class="process-field"><label>繰り返し回数</label><input class="process-input" type="number" id="repeatCount" min="1" value="2"></div>
+          <div class="process-field"><label>間隔（秒）</label><input class="process-input" type="number" id="repeatInterval" min="0.1" step="0.1" value="0"></div>`;
+        applyBtn.onclick  = () => { applyRepeat(); modal.classList.add('hidden'); };
+      } else if (type === 'fadein') {
+        title.textContent = 'フェードイン';
+        fields.innerHTML  = `
+          <div class="process-field"><label>開始時間（秒）</label><input class="process-input" type="number" id="fadeStart" min="0" step="0.1" value="0"></div>
+          <div class="process-field"><label>終了時間（秒）</label><input class="process-input" type="number" id="fadeEnd" min="0" step="0.1" value="5"></div>`;
+        applyBtn.onclick  = () => { applyFade('in'); modal.classList.add('hidden'); };
+      } else if (type === 'fadeout') {
+        title.textContent = 'フェードアウト';
+        fields.innerHTML  = `
+          <div class="process-field"><label>開始時間（秒）</label><input class="process-input" type="number" id="fadeStart" min="0" step="0.1" value="0"></div>
+          <div class="process-field"><label>終了時間（秒）</label><input class="process-input" type="number" id="fadeEnd" min="0" step="0.1" value="5"></div>`;
+        applyBtn.onclick  = () => { applyFade('out'); modal.classList.add('hidden'); };
+      }
+
+      modal.classList.remove('hidden');
+    }
+
+    function applyMirror() {
+      if (!schedule.length) return;
+      pushUndo();
+      const maxMs    = schedule[schedule.length - 1].time_ms;
+      const mirrored = [...schedule].reverse().map(row => ({
+        time_ms:   maxMs + (maxMs - row.time_ms) + 10,
+        direction: row.direction === 0 ? 1 : 0,
+        strength:  row.strength,
+      }));
+      schedule = [...schedule, ...mirrored];
+      renderRows(); renderTimeline();
+    }
+
+    function applyRepeat() {
+      const count    = parseInt(document.getElementById('repeatCount').value) || 2;
+      const interval = parseFloat(document.getElementById('repeatInterval').value) || 0;
+      if (!schedule.length) return;
+      pushUndo();
+      const maxMs  = schedule[schedule.length - 1].time_ms;
+      const offset = maxMs + Math.round(interval * 10);
+      const base   = [...schedule];
+      for (let i = 1; i < count; i++) {
+        base.forEach(row => {
+          schedule.push({ time_ms: row.time_ms + offset * i, direction: row.direction, strength: row.strength });
+        });
+      }
+      schedule.sort((a, b) => a.time_ms - b.time_ms);
+      renderRows(); renderTimeline();
+    }
+
+    function applyFade(dir) {
+      const startSec = parseFloat(document.getElementById('fadeStart').value) || 0;
+      const endSec   = parseFloat(document.getElementById('fadeEnd').value)   || 5;
+      const startMs  = Math.round(startSec * 10);
+      const endMs    = Math.round(endSec   * 10);
+      if (startMs >= endMs) { alert('終了時間は開始時間より大きくしてください'); return; }
+      pushUndo();
+      schedule = schedule.map(row => {
+        if (row.time_ms < startMs || row.time_ms > endMs) return row;
+        const ratio  = (row.time_ms - startMs) / (endMs - startMs);
+        const factor = dir === 'in' ? ratio : (1 - ratio);
+        return { ...row, strength: Math.round(row.strength * factor) };
+      });
+      renderRows(); renderTimeline();
+    }
+
+    // ══════════════════════════════
+    //  パターン
+    // ══════════════════════════════
+    function loadPatternsFromStorage() {
+      try { patterns = JSON.parse(localStorage.getItem('ble-patterns') || '{}'); }
+      catch { patterns = {}; }
+    }
+
+    function savePatternsToStorage() { localStorage.setItem('ble-patterns', JSON.stringify(patterns)); }
+
+    function openPatternModal() {
+      const list = document.getElementById('pattern-list');
+      list.innerHTML = '';
+      const keys = Object.keys(patterns);
+      if (!keys.length) {
+        list.innerHTML = '<p style="font-size:11px;color:var(--text-dim);font-family:\'JetBrains Mono\',monospace;margin-bottom:12px;">登録済みパターンはありません</p>';
+      }
+      keys.forEach(key => {
+        const p = patterns[key];
+        const div = document.createElement('div');
+        div.className = 'pattern-item';
+        div.innerHTML = `<span class="p-name">${key}</span><span class="p-count">${p.length}行</span><button class="pattern-del" onclick="deletePattern('${key}',event)">✕</button>`;
+        div.addEventListener('click', (e) => { if (e.target.classList.contains('pattern-del')) return; applyPattern(key); });
+        list.appendChild(div);
+      });
+      document.getElementById('pattern-modal').classList.remove('hidden');
+    }
+
+    function closePatternModal() { document.getElementById('pattern-modal').classList.add('hidden'); }
+
+    function savePattern() {
+      const name = document.getElementById('pattern-name-input').value.trim();
+      if (!name) { alert('パターン名を入力してください'); return; }
+      if (!schedule.length) { alert('CSVが空です'); return; }
+      patterns[name] = JSON.parse(JSON.stringify(schedule));
+      savePatternsToStorage();
+      alert('登録しました');
+      openPatternModal();
+    }
+
+    function applyPattern(key) {
+      if (!patterns[key]) return;
+      pushUndo();
+      const offset = schedule.length ? schedule[schedule.length - 1].time_ms + 10 : 0;
+      patterns[key].forEach(row => {
+        schedule.push({ time_ms: row.time_ms + offset, direction: row.direction, strength: row.strength });
+      });
+      schedule.sort((a, b) => a.time_ms - b.time_ms);
+      renderRows(); renderTimeline();
+      closePatternModal();
+    }
+
+    function deletePattern(key, e) {
+      e.stopPropagation();
+      if (!confirm(key + ' を削除しますか？')) return;
+      delete patterns[key];
+      savePatternsToStorage();
+      openPatternModal();
+    }
+  </script>
+</body>
+</html>
