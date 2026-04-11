@@ -40,10 +40,8 @@
 
     /* 左カラム */
     #left-col { display:flex; flex-direction:column; overflow:hidden; flex:1; min-width:0; }
-
-    /* 右カラム（行一覧・PC専用） */
-    #right-col { width:320px; flex-shrink:0; background:var(--bg2); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
-    #right-col .col-title { padding:10px 14px; font-size:10px; font-family:'JetBrains Mono',monospace; color:var(--text-dim); letter-spacing:.1em; text-transform:uppercase; border-bottom:1px solid var(--border); flex-shrink:0; }
+    #left-col > * { flex-shrink:0; }
+    #left-spacer { flex:1; } /* 残りスペースを埋める */
 
     /* ── プレイヤー ── */
     #player-section { background:var(--bg2); border-bottom:1px solid var(--border); flex-shrink:0; }
@@ -271,6 +269,8 @@
         <button class="tool-btn warn" onclick="clearAll()">全削除</button>
       </div>
 
+      <div id="left-spacer"></div>
+
       <!-- 行一覧（スマホのみ） -->
       <div id="row-container">
         <div class="row-header">
@@ -412,6 +412,7 @@
       sb.addEventListener('touchmove',  (e)=>{ if(seeking){ e.preventDefault(); preview(e.touches[0].clientX); } }, {passive:false});
       sb.addEventListener('touchend',   (e)=>{ if(seeking) commit(e.changedTouches[0].clientX); });
     })();
+
     // ══════════════════════════════
     //  タイムライン操作
     // ══════════════════════════════
