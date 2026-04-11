@@ -940,10 +940,12 @@
     // ══════════════════════════════
     //  初期化
     // ══════════════════════════════
-    // 編集画面から戻ってきた場合は接続画面をスキップ
+   // 編集画面から戻ってきた場合は接続画面をスキップしてフォルダ再読み込み
     if (sessionStorage.getItem('editor-work-id')) {
       sessionStorage.removeItem('editor-work-id');
       document.getElementById('connect-screen').classList.add('hidden');
+      // ファイルを再読み込みさせる
+      setTimeout(() => document.getElementById('addFolderBtn').click(), 100);
     }
     loadLibraryFromStorage();
     renderLibrarySidebar();
