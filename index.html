@@ -119,18 +119,18 @@
     body.fullscreen #sidebar, body.fullscreen #topbar, body.fullscreen #tracklist { display:none; }
     body.fullscreen #main { background:#000; }
     body.fullscreen #video-wrap { position:fixed; inset:0; z-index:401; }
-    body.fullscreen #controls,
-    body.fullscreen #timeline { position:fixed; left:0; right:0; z-index:402; opacity:0; transition:opacity .3s; pointer-events:none; background:rgba(10,10,15,.9); }
-    body.fullscreen #timeline  { bottom:112px; }
-    body.fullscreen #controls  { bottom:0; }
+    body.fullscreen #controls { position:fixed; bottom:0; left:0; right:0; z-index:402; opacity:0; transition:opacity .3s; pointer-events:none; background:rgba(10,10,15,.9); }
+    body.fullscreen #timeline  { position:fixed; bottom:86px; left:0; right:0; z-index:402; opacity:0; transition:opacity .3s; pointer-events:none; background:rgba(10,10,15,.9); }
     body.fullscreen.show-controls #controls,
     body.fullscreen.show-controls #timeline { opacity:1; pointer-events:auto; }
     .exit-fullscreen-btn { display:none; position:absolute; top:12px; left:12px; z-index:410; background:rgba(0,0,0,.6); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:8px 14px; font-size:13px; cursor:pointer; font-family:'JetBrains Mono',monospace; }
     body.fullscreen.show-controls .exit-fullscreen-btn { display:block; }
     body.fullscreen .fullscreen-btn { display:none; }
+    /* スマホ全画面：回転＋タイムライン非表示 */
     @media (max-width:768px) {
       body.fullscreen #player-area { position:fixed; inset:0; z-index:400; background:#000; display:flex; flex-direction:column; width:100dvh; height:100dvw; top:50%; left:50%; transform:translate(-50%,-50%) rotate(90deg); }
-      body.fullscreen #timeline { bottom:112px; }
+      body.fullscreen #timeline { display:none; }
+      body.fullscreen #controls { bottom:0; }
     }
 
     /* ── BLE接続画面 ── */
@@ -747,14 +747,6 @@
     (function() {
       const sb = document.getElementById('seekbar');
       let seeking = false, rafId = null;
-      function getClientX(e) {
-        // スマホ全画面時は90度回転しているのでclientYを反転して使う
-        if (document.body.classList.contains('fullscreen') && window.innerWidth < 769) {
-          const touch = e.touches ? e.touches[0] : (e.changedTouches ? e.changedTouches[0] : e);
-          return window.innerHeight - touch.clientY;
-        }
-        return e.touches ? e.touches[0].clientX : (e.changedTouches ? e.changedTouches[0].clientX : e.clientX);
-      }
       function preview(clientX) {
         const rect  = sb.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
@@ -771,12 +763,12 @@
         player.currentTime = ratio*(player.duration||0);
         seeking=false; setSeekingState(false);
       }
-      sb.addEventListener('mousedown',  (e)=>{ seeking=true; setSeekingState(true); showControlsTemporary(); preview(getClientX(e)); });
-      document.addEventListener('mousemove',  (e)=>{ if(seeking) preview(getClientX(e)); });
-      document.addEventListener('mouseup',    (e)=>{ if(seeking) commit(getClientX(e)); });
-      sb.addEventListener('touchstart', (e)=>{ seeking=true; setSeekingState(true); preview(getClientX(e)); }, {passive:true});
-      sb.addEventListener('touchmove',  (e)=>{ if(seeking){ e.preventDefault(); preview(getClientX(e)); } }, {passive:false});
-      sb.addEventListener('touchend',   (e)=>{ if(seeking) commit(getClientX(e)); });
+      sb.addEventListener('mousedown',  (e)=>{ seeking=true; setSeekingState(true); showControlsTemporary(); preview(e.clientX); });
+      document.addEventListener('mousemove',  (e)=>{ if(seeking) preview(e.clientX); });
+      document.addEventListener('mouseup',    (e)=>{ if(seeking) commit(e.clientX); });
+      sb.addEventListener('touchstart', (e)=>{ seeking=true; setSeekingState(true); preview(e.touches[0].clientX); }, {passive:true});
+      sb.addEventListener('touchmove',  (e)=>{ if(seeking){ e.preventDefault(); preview(e.touches[0].clientX); } }, {passive:false});
+      sb.addEventListener('touchend',   (e)=>{ if(seeking) commit(e.changedTouches[0].clientX); });
     })();
 
     document.getElementById('playBtn').addEventListener('click', () => {
@@ -850,17 +842,10 @@
       }
     }
 
-    // タイムラインスライド（スムーズシーク・回転対応）
+    // タイムラインスライド（スムーズシーク）
     (function() {
       const tl = document.getElementById('tlTrack');
       let sliding = false, rafId = null;
-      function getClientX(e) {
-        if (document.body.classList.contains('fullscreen') && window.innerWidth < 769) {
-          const touch = e.touches ? e.touches[0] : (e.changedTouches ? e.changedTouches[0] : e);
-          return window.innerHeight - touch.clientY;
-        }
-        return e.touches ? e.touches[0].clientX : (e.changedTouches ? e.changedTouches[0].clientX : e.clientX);
-      }
       function preview(clientX) {
         const rect  = tl.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
@@ -877,12 +862,12 @@
         player.currentTime = ratio*(player.duration||0);
         sliding=false; setSeekingState(false);
       }
-      tl.addEventListener('mousedown',  (e)=>{ sliding=true; setSeekingState(true); showControlsTemporary(); preview(getClientX(e)); });
-      document.addEventListener('mousemove',  (e)=>{ if(sliding) preview(getClientX(e)); });
-      document.addEventListener('mouseup',    (e)=>{ if(sliding) commit(getClientX(e)); });
-      tl.addEventListener('touchstart', (e)=>{ sliding=true; setSeekingState(true); preview(getClientX(e)); }, {passive:true});
-      tl.addEventListener('touchmove',  (e)=>{ if(sliding){ e.preventDefault(); preview(getClientX(e)); } }, {passive:false});
-      tl.addEventListener('touchend',   (e)=>{ if(sliding) commit(getClientX(e)); });
+      tl.addEventListener('mousedown',  (e)=>{ sliding=true; setSeekingState(true); showControlsTemporary(); preview(e.clientX); });
+      document.addEventListener('mousemove',  (e)=>{ if(sliding) preview(e.clientX); });
+      document.addEventListener('mouseup',    (e)=>{ if(sliding) commit(e.clientX); });
+      tl.addEventListener('touchstart', (e)=>{ sliding=true; setSeekingState(true); preview(e.touches[0].clientX); }, {passive:true});
+      tl.addEventListener('touchmove',  (e)=>{ if(sliding){ e.preventDefault(); preview(e.touches[0].clientX); } }, {passive:false});
+      tl.addEventListener('touchend',   (e)=>{ if(sliding) commit(e.changedTouches[0].clientX); });
     })();
 
     // ══════════════════════════════
