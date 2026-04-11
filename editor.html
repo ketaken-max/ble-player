@@ -403,9 +403,9 @@
         const rect  = sb.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
         player.currentTime = ratio*(player.duration||0);
-        seeking=false;
+        seeking=false; document.body.style.userSelect='';
       }
-      sb.addEventListener('mousedown',  (e)=>{ seeking=true; preview(e.clientX); });
+      sb.addEventListener('mousedown',  (e)=>{ seeking=true; document.body.style.userSelect='none'; preview(e.clientX); });
       document.addEventListener('mousemove',  (e)=>{ if(seeking) preview(e.clientX); });
       document.addEventListener('mouseup',    (e)=>{ if(seeking) commit(e.clientX); });
       sb.addEventListener('touchstart', (e)=>{ seeking=true; preview(e.touches[0].clientX); }, {passive:true});
@@ -433,9 +433,9 @@
         const rect  = tl.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
         player.currentTime = ratio*(player.duration||0);
-        sliding=false;
+        sliding=false; document.body.style.userSelect='';
       }
-      tl.addEventListener('mousedown',  (e)=>{ sliding=true; preview(e.clientX); });
+      tl.addEventListener('mousedown',  (e)=>{ sliding=true; document.body.style.userSelect='none'; preview(e.clientX); });
       document.addEventListener('mousemove',  (e)=>{ if(sliding) preview(e.clientX); });
       document.addEventListener('mouseup',    (e)=>{ if(sliding) commit(e.clientX); });
       tl.addEventListener('touchstart', (e)=>{ sliding=true; preview(e.touches[0].clientX); }, {passive:true});
