@@ -111,7 +111,7 @@
 
     /* スマホ：縦積みで行一覧を左カラム内に */
     #row-container { display:none; flex-direction:column; flex:1; overflow:hidden; }
-    #right-col { display:none; }
+    #right-col { display:none; width:320px; flex-shrink:0; background:var(--bg2); border-left:1px solid var(--border); flex-direction:column; overflow:hidden; }
 
     /* ── モーダル ── */
     .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:800; display:flex; align-items:center; justify-content:center; padding:20px; }
@@ -385,10 +385,10 @@
       return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
     }
 
-    // seekbarスライド
+    // seekbarスライド（スムーズシーク）
     (function() {
       const sb = document.getElementById('seekbar');
-      let seeking = false;
+      let seeking = false, rafId = null;
       function preview(clientX) {
         const rect  = sb.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
@@ -396,20 +396,22 @@
         document.getElementById('seekbarFill').style.width = (ratio*100)+'%';
         document.getElementById('tlPlayhead').style.left   = (ratio*100)+'%';
         document.getElementById('timecur').textContent     = formatTime(ratio*dur);
+        if (!rafId) rafId = setTimeout(()=>{ player.currentTime=ratio*(player.duration||0); rafId=null; }, 150);
       }
       function commit(clientX) {
+        clearTimeout(rafId); rafId=null;
         const rect  = sb.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
-        player.currentTime = ratio * (player.duration || 0);
+        player.currentTime = ratio*(player.duration||0);
+        seeking=false;
       }
       sb.addEventListener('mousedown',  (e)=>{ seeking=true; preview(e.clientX); });
       document.addEventListener('mousemove',  (e)=>{ if(seeking) preview(e.clientX); });
-      document.addEventListener('mouseup',    (e)=>{ if(seeking){ commit(e.clientX); seeking=false; } });
+      document.addEventListener('mouseup',    (e)=>{ if(seeking) commit(e.clientX); });
       sb.addEventListener('touchstart', (e)=>{ seeking=true; preview(e.touches[0].clientX); }, {passive:true});
       sb.addEventListener('touchmove',  (e)=>{ if(seeking){ e.preventDefault(); preview(e.touches[0].clientX); } }, {passive:false});
-      sb.addEventListener('touchend',   (e)=>{ if(seeking){ commit(e.changedTouches[0].clientX); seeking=false; } });
+      sb.addEventListener('touchend',   (e)=>{ if(seeking) commit(e.changedTouches[0].clientX); });
     })();
-
     // ══════════════════════════════
     //  タイムライン操作
     // ══════════════════════════════
