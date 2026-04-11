@@ -744,7 +744,7 @@
     player.addEventListener('seeked', () => { lastSentIndex=-1; });
 
     // seekbarスライド（スムーズシーク・回転対応）
-    (function() {
+    function() {
       const sb = document.getElementById('seekbar');
       let seeking = false, rafId = null;
 
