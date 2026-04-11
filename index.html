@@ -119,10 +119,13 @@
     body.fullscreen #sidebar, body.fullscreen #topbar, body.fullscreen #tracklist { display:none; }
     body.fullscreen #main { background:#000; }
     body.fullscreen #video-wrap { position:fixed; inset:0; z-index:401; }
-    body.fullscreen #controls, body.fullscreen #timeline { position:fixed; left:0; right:0; z-index:402; opacity:0; transition:opacity .3s; pointer-events:none; background:rgba(10,10,15,.85); }
-    body.fullscreen #controls  { bottom:0; }
-    body.fullscreen #timeline  { bottom:112px; }
-    body.fullscreen.show-controls #controls, body.fullscreen.show-controls #timeline { opacity:1; pointer-events:auto; }
+    body.fullscreen #timeline { display:none; }
+    body.fullscreen #controls { position:fixed; bottom:0; left:0; right:0; z-index:402; opacity:0; transition:opacity .3s; pointer-events:none; background:rgba(10,10,15,.9); }
+    body.fullscreen.show-controls #controls { opacity:1; pointer-events:auto; }
+    /* 全画面時：time-rowをbtn-rowの中に見せる（flex order変更） */
+    body.fullscreen #controls { display:flex; flex-direction:column; }
+    body.fullscreen .time-row { order:2; margin-bottom:0; margin-top:6px; }
+    body.fullscreen .btn-row  { order:1; }
     .exit-fullscreen-btn { display:none; position:absolute; top:12px; left:12px; z-index:410; background:rgba(0,0,0,.6); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:8px 14px; font-size:13px; cursor:pointer; font-family:'JetBrains Mono',monospace; }
     body.fullscreen.show-controls .exit-fullscreen-btn { display:block; }
     body.fullscreen .fullscreen-btn { display:none; }
@@ -758,12 +761,12 @@
         const rect  = sb.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
         player.currentTime = ratio*(player.duration||0);
-        seeking=false;
+        seeking=false; setSeekingState(false);
       }
-      sb.addEventListener('mousedown',  (e)=>{ seeking=true; preview(e.clientX); });
+      sb.addEventListener('mousedown',  (e)=>{ seeking=true; setSeekingState(true); showControlsTemporary(); preview(e.clientX); });
       document.addEventListener('mousemove',  (e)=>{ if(seeking) preview(e.clientX); });
       document.addEventListener('mouseup',    (e)=>{ if(seeking) commit(e.clientX); });
-      sb.addEventListener('touchstart', (e)=>{ seeking=true; preview(e.touches[0].clientX); }, {passive:true});
+      sb.addEventListener('touchstart', (e)=>{ seeking=true; setSeekingState(true); preview(e.touches[0].clientX); }, {passive:true});
       sb.addEventListener('touchmove',  (e)=>{ if(seeking){ e.preventDefault(); preview(e.touches[0].clientX); } }, {passive:false});
       sb.addEventListener('touchend',   (e)=>{ if(seeking) commit(e.changedTouches[0].clientX); });
     })();
@@ -857,12 +860,12 @@
         const rect  = tl.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
         player.currentTime = ratio*(player.duration||0);
-        sliding=false;
+        sliding=false; setSeekingState(false);
       }
-      tl.addEventListener('mousedown',  (e)=>{ sliding=true; preview(e.clientX); });
+      tl.addEventListener('mousedown',  (e)=>{ sliding=true; setSeekingState(true); showControlsTemporary(); preview(e.clientX); });
       document.addEventListener('mousemove',  (e)=>{ if(sliding) preview(e.clientX); });
       document.addEventListener('mouseup',    (e)=>{ if(sliding) commit(e.clientX); });
-      tl.addEventListener('touchstart', (e)=>{ sliding=true; preview(e.touches[0].clientX); }, {passive:true});
+      tl.addEventListener('touchstart', (e)=>{ sliding=true; setSeekingState(true); preview(e.touches[0].clientX); }, {passive:true});
       tl.addEventListener('touchmove',  (e)=>{ if(sliding){ e.preventDefault(); preview(e.touches[0].clientX); } }, {passive:false});
       tl.addEventListener('touchend',   (e)=>{ if(sliding) commit(e.changedTouches[0].clientX); });
     })();
@@ -939,10 +942,19 @@
     function leaveFullscreen()  { document.body.classList.remove('fullscreen','show-controls'); }
 
     let controlsTimer=null;
+    let isSeeking = false; // シーク中フラグ
+
     function showControlsTemporary() {
       document.body.classList.add('show-controls');
       clearTimeout(controlsTimer);
-      controlsTimer = setTimeout(()=>document.body.classList.remove('show-controls'),3000);
+      if (!isSeeking) {
+        controlsTimer = setTimeout(()=>document.body.classList.remove('show-controls'),3000);
+      }
+    }
+
+    function setSeekingState(val) {
+      isSeeking = val;
+      if (!val) showControlsTemporary(); // 操作終了後に再タイマー開始
     }
 
     document.getElementById('video-wrap').addEventListener('click', ()=>{
@@ -950,6 +962,11 @@
     });
 
     document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') leaveFullscreen(); });
+
+    // テキスト選択防止（ドラッグ中）
+    document.addEventListener('selectstart', (e)=>{
+      if (isSeeking) e.preventDefault();
+    });
 
     function toggleMode() {
       const btn=document.getElementById('modeBtn');
