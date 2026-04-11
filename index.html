@@ -747,29 +747,52 @@
     (function() {
       const sb = document.getElementById('seekbar');
       let seeking = false, rafId = null;
-      function preview(clientX) {
-        const rect  = sb.getBoundingClientRect();
-        const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
-        const dur   = player.duration || 0;
+
+      function getX(e) {
+        // スマホ全画面時はCSSで90度回転しているためclientYで代用
+        const isRotated = document.body.classList.contains('fullscreen') && window.innerWidth < 769;
+        if (e.touches && e.touches[0]) {
+          return isRotated ? (window.innerHeight - e.touches[0].clientY) : e.touches[0].clientX;
+        }
+        if (e.changedTouches && e.changedTouches[0]) {
+          return isRotated ? (window.innerHeight - e.changedTouches[0].clientY) : e.changedTouches[0].clientX;
+        }
+        return e.clientX;
+      }
+
+      function getRect() {
+        const rect = sb.getBoundingClientRect();
+        // スマホ全画面時は回転後の座標に合わせてleft/widthを変換
+        if (document.body.classList.contains('fullscreen') && window.innerWidth < 769) {
+          return { left: window.innerHeight - rect.bottom, width: rect.height };
+        }
+        return { left: rect.left, width: rect.width };
+      }
+
+      function preview(e) {
+        const x = getX(e);
+        const r = getRect();
+        const ratio = Math.max(0, Math.min(1, (x - r.left) / r.width));
+        const dur = player.duration || 0;
         document.getElementById('seekbarFill').style.width = (ratio*100)+'%';
         document.getElementById('tlPlayhead').style.left   = (ratio*100)+'%';
         document.getElementById('timecur').textContent     = formatTime(ratio*dur);
         if (!rafId) rafId = setTimeout(()=>{ player.currentTime=ratio*(player.duration||0); rafId=null; }, 150);
       }
-      function commit(clientX) {
+      function commit(e) {
         clearTimeout(rafId); rafId=null;
-        const rect  = sb.getBoundingClientRect();
-        const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
+        const x = getX(e);
+        const r = getRect();
+        const ratio = Math.max(0, Math.min(1, (x - r.left) / r.width));
         player.currentTime = ratio*(player.duration||0);
         seeking=false; setSeekingState(false);
       }
-      sb.addEventListener('mousedown',  (e)=>{ seeking=true; setSeekingState(true); showControlsTemporary(); preview(e.clientX); });
-      document.addEventListener('mousemove',  (e)=>{ if(seeking) preview(e.clientX); });
-      document.addEventListener('mouseup',    (e)=>{ if(seeking) commit(e.clientX); });
-      sb.addEventListener('touchstart', (e)=>{ seeking=true; setSeekingState(true); preview(e.touches[0].clientX); }, {passive:true});
-      sb.addEventListener('touchmove',  (e)=>{ if(seeking){ e.preventDefault(); preview(e.touches[0].clientX); } }, {passive:false});
-      sb.addEventListener('touchend',   (e)=>{ if(seeking) commit(e.changedTouches[0].clientX); });
-    })();
+      sb.addEventListener('mousedown',  (e)=>{ seeking=true; setSeekingState(true); showControlsTemporary(); preview(e); });
+      document.addEventListener('mousemove',  (e)=>{ if(seeking) preview(e); });
+      document.addEventListener('mouseup',    (e)=>{ if(seeking) commit(e); });
+      sb.addEventListener('touchstart', (e)=>{ seeking=true; setSeekingState(true); preview(e); }, {passive:true});
+      sb.addEventListener('touchmove',  (e)=>{ if(seeking){ e.preventDefault(); preview(e); } }, {passive:false});
+      sb.addEventListener('touchend',   (e)=>{ if(seeking) commit(e); });
 
     document.getElementById('playBtn').addEventListener('click', () => {
       if (player.paused) { player.play(); document.getElementById('playBtn').textContent='⏸'; }
