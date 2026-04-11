@@ -79,7 +79,7 @@
     .no-media p { font-size:12px; font-family:'JetBrains Mono',monospace; letter-spacing:.1em; }
     .fullscreen-btn { position:absolute; top:12px; right:12px; background:rgba(0,0,0,.5); border:1px solid var(--border); border-radius:6px; color:var(--text-dim); padding:6px 10px; font-size:11px; cursor:pointer; font-family:'JetBrains Mono',monospace; transition:all .15s; }
     .fullscreen-hint { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); font-family:'JetBrains Mono',monospace; font-size:10px; color:rgba(255,255,255,.3); letter-spacing:.1em; pointer-events:none; opacity:0; transition:opacity .3s; }
-    body.fullscreen .fullscreen-hint { opacity:1; }
+    body.fullscreen .fullscreen-btn { display:none; }
 
     /* ── コントロール ── */
     #controls { background:var(--bg2); border-top:1px solid var(--border); padding:10px 20px 12px; flex-shrink:0; }
@@ -308,7 +308,6 @@
           <video id="media-player" style="display:none; max-width:100%; max-height:100%;"></video>
           <button class="fullscreen-btn" onclick="toggleFullscreen()">⛶ 全画面</button>
           <button class="exit-fullscreen-btn" onclick="leaveFullscreen()">✕ 終了</button>
-          <div class="fullscreen-hint">タップで UI を表示</div>
         </div>
 
         <div id="controls">
@@ -747,26 +746,16 @@
       function seek(clientX) {
         const rect  = sb.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        const dur   = player.duration || 0;
-        // シーク中はUIだけ更新してplayerは動かさない
-        document.getElementById('seekbarFill').style.width  = (ratio*100) + '%';
-        document.getElementById('tlPlayhead').style.left    = (ratio*100) + '%';
-        document.getElementById('timecur').textContent      = formatTime(ratio * dur);
-        if (!seeking) player.currentTime = ratio * dur;
-      }
-      function commitSeek(clientX) {
-        const rect  = sb.getBoundingClientRect();
-        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
         player.currentTime = ratio * (player.duration || 0);
-        seeking = false;
       }
       sb.addEventListener('mousedown',  (e) => { seeking=true; seek(e.clientX); });
       document.addEventListener('mousemove',  (e) => { if(seeking) seek(e.clientX); });
-      document.addEventListener('mouseup',    (e) => { if(seeking) commitSeek(e.clientX); seeking=false; });
+      document.addEventListener('mouseup',    ()  => { seeking=false; });
       sb.addEventListener('touchstart', (e) => { seeking=true; seek(e.touches[0].clientX); }, {passive:true});
       sb.addEventListener('touchmove',  (e) => { if(seeking){ e.preventDefault(); seek(e.touches[0].clientX); } }, {passive:false});
-      sb.addEventListener('touchend',   (e) => { if(seeking) commitSeek(e.changedTouches[0].clientX); seeking=false; });
+      sb.addEventListener('touchend',   ()  => { seeking=false; });
     })();
+
     document.getElementById('playBtn').addEventListener('click', () => {
       if (player.paused) { player.play(); document.getElementById('playBtn').textContent='⏸'; }
       else               { player.pause(); document.getElementById('playBtn').textContent='▶'; }
@@ -845,23 +834,14 @@
       function seekFromTl(clientX) {
         const rect  = tl.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        const dur   = player.duration || 0;
-        document.getElementById('seekbarFill').style.width  = (ratio*100) + '%';
-        document.getElementById('tlPlayhead').style.left    = (ratio*100) + '%';
-        document.getElementById('timecur').textContent      = formatTime(ratio * dur);
-      }
-      function commitSeek(clientX) {
-        const rect  = tl.getBoundingClientRect();
-        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
         player.currentTime = ratio * (player.duration || 0);
-        sliding = false;
       }
       tl.addEventListener('mousedown',  (e) => { sliding=true; seekFromTl(e.clientX); });
       document.addEventListener('mousemove',  (e) => { if(sliding) seekFromTl(e.clientX); });
-      document.addEventListener('mouseup',    (e) => { if(sliding) commitSeek(e.clientX); sliding=false; });
+      document.addEventListener('mouseup',    ()  => { sliding=false; });
       tl.addEventListener('touchstart', (e) => { sliding=true; seekFromTl(e.touches[0].clientX); }, {passive:true});
       tl.addEventListener('touchmove',  (e) => { if(sliding){ e.preventDefault(); seekFromTl(e.touches[0].clientX); } }, {passive:false});
-      tl.addEventListener('touchend',   (e) => { if(sliding) commitSeek(e.changedTouches[0].clientX); sliding=false; });
+      tl.addEventListener('touchend',   ()  => { sliding=false; });
     })();
 
     // ══════════════════════════════
@@ -960,6 +940,11 @@
     // ══════════════════════════════
     //  初期化
     // ══════════════════════════════
+    // 編集画面から戻ってきた場合は接続画面をスキップ
+    if (sessionStorage.getItem('editor-work-id')) {
+      sessionStorage.removeItem('editor-work-id');
+      document.getElementById('connect-screen').classList.add('hidden');
+    }
     loadLibraryFromStorage();
     renderLibrarySidebar();
   </script>
