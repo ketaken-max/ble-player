@@ -119,12 +119,13 @@
     body.fullscreen #sidebar, body.fullscreen #topbar, body.fullscreen #tracklist { display:none; }
     body.fullscreen #main { background:#000; }
     body.fullscreen #video-wrap { position:fixed; inset:0; z-index:401; }
-    body.fullscreen #controls, body.fullscreen #timeline { position:fixed; left:0; right:0; z-index:402; opacity:0; transition:opacity .3s; pointer-events:none; }
+    body.fullscreen #controls, body.fullscreen #timeline { position:fixed; left:0; right:0; z-index:402; opacity:0; transition:opacity .3s; pointer-events:none; background:rgba(10,10,15,.85); }
     body.fullscreen #controls  { bottom:0; }
-    body.fullscreen #timeline  { bottom:0; transform:translateY(-100%); }
+    body.fullscreen #timeline  { bottom:112px; }
     body.fullscreen.show-controls #controls, body.fullscreen.show-controls #timeline { opacity:1; pointer-events:auto; }
     .exit-fullscreen-btn { display:none; position:absolute; top:12px; left:12px; z-index:410; background:rgba(0,0,0,.6); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:8px 14px; font-size:13px; cursor:pointer; font-family:'JetBrains Mono',monospace; }
     body.fullscreen.show-controls .exit-fullscreen-btn { display:block; }
+    body.fullscreen .fullscreen-btn { display:none; }
     @media (max-width:768px) {
       body.fullscreen #player-area { position:fixed; inset:0; z-index:400; background:#000; display:flex; flex-direction:column; width:100dvh; height:100dvw; top:50%; left:50%; transform:translate(-50%,-50%) rotate(90deg); }
     }
@@ -838,21 +839,32 @@
       }
     }
 
-    // タイムラインスライド操作
+    // タイムラインスライド（スムーズシーク）
     (function() {
       const tl = document.getElementById('tlTrack');
-      let sliding = false;
-      function seekFromTl(clientX) {
+      let sliding = false, rafId = null;
+      function preview(clientX) {
         const rect  = tl.getBoundingClientRect();
-        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        player.currentTime = ratio * (player.duration || 0);
+        const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
+        const dur   = player.duration || 0;
+        document.getElementById('seekbarFill').style.width = (ratio*100)+'%';
+        document.getElementById('tlPlayhead').style.left   = (ratio*100)+'%';
+        document.getElementById('timecur').textContent     = formatTime(ratio*dur);
+        if (!rafId) rafId = setTimeout(()=>{ player.currentTime=ratio*(player.duration||0); rafId=null; }, 150);
       }
-      tl.addEventListener('mousedown',  (e) => { sliding=true; seekFromTl(e.clientX); });
-      document.addEventListener('mousemove',  (e) => { if(sliding) seekFromTl(e.clientX); });
-      document.addEventListener('mouseup',    ()  => { sliding=false; });
-      tl.addEventListener('touchstart', (e) => { sliding=true; seekFromTl(e.touches[0].clientX); }, {passive:true});
-      tl.addEventListener('touchmove',  (e) => { if(sliding){ e.preventDefault(); seekFromTl(e.touches[0].clientX); } }, {passive:false});
-      tl.addEventListener('touchend',   ()  => { sliding=false; });
+      function commit(clientX) {
+        clearTimeout(rafId); rafId=null;
+        const rect  = tl.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
+        player.currentTime = ratio*(player.duration||0);
+        sliding=false;
+      }
+      tl.addEventListener('mousedown',  (e)=>{ sliding=true; preview(e.clientX); });
+      document.addEventListener('mousemove',  (e)=>{ if(sliding) preview(e.clientX); });
+      document.addEventListener('mouseup',    (e)=>{ if(sliding) commit(e.clientX); });
+      tl.addEventListener('touchstart', (e)=>{ sliding=true; preview(e.touches[0].clientX); }, {passive:true});
+      tl.addEventListener('touchmove',  (e)=>{ if(sliding){ e.preventDefault(); preview(e.touches[0].clientX); } }, {passive:false});
+      tl.addEventListener('touchend',   (e)=>{ if(sliding) commit(e.changedTouches[0].clientX); });
     })();
 
     // ══════════════════════════════
