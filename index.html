@@ -747,29 +747,70 @@
     (function() {
       const sb = document.getElementById('seekbar');
       let seeking = false, rafId = null;
-      function preview(clientX) {
-        const rect  = sb.getBoundingClientRect();
-        const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
-        const dur   = player.duration || 0;
+
+      function previewRatio(ratio) {
+        const dur = player.duration || 0;
         document.getElementById('seekbarFill').style.width = (ratio*100)+'%';
         document.getElementById('tlPlayhead').style.left   = (ratio*100)+'%';
         document.getElementById('timecur').textContent     = formatTime(ratio*dur);
         if (!rafId) rafId = setTimeout(()=>{ player.currentTime=ratio*(player.duration||0); rafId=null; }, 150);
       }
-      function commit(clientX) {
+      function commitRatio(ratio) {
         clearTimeout(rafId); rafId=null;
-        const rect  = sb.getBoundingClientRect();
-        const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
         player.currentTime = ratio*(player.duration||0);
         seeking=false; setSeekingState(false);
       }
-      sb.addEventListener('mousedown',  (e)=>{ seeking=true; setSeekingState(true); showControlsTemporary(); preview(e.clientX); });
-      document.addEventListener('mousemove',  (e)=>{ if(seeking) preview(e.clientX); });
-      document.addEventListener('mouseup',    (e)=>{ if(seeking) commit(e.clientX); });
-      sb.addEventListener('touchstart', (e)=>{ seeking=true; setSeekingState(true); preview(e.touches[0].clientX); }, {passive:true});
-      sb.addEventListener('touchmove',  (e)=>{ if(seeking){ e.preventDefault(); preview(e.touches[0].clientX); } }, {passive:false});
-      sb.addEventListener('touchend',   (e)=>{ if(seeking) commit(e.changedTouches[0].clientX); });
-    })();
+      function ratioFromX(clientX) {
+        const rect = sb.getBoundingClientRect();
+        return Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
+      }
+
+      // PC：マウス操作
+      sb.addEventListener('mousedown', (e)=>{ seeking=true; setSeekingState(true); showControlsTemporary(); previewRatio(ratioFromX(e.clientX)); });
+      document.addEventListener('mousemove', (e)=>{ if(seeking) previewRatio(ratioFromX(e.clientX)); });
+      document.addEventListener('mouseup',   (e)=>{ if(seeking) commitRatio(ratioFromX(e.clientX)); });
+
+      // スマホ通常時：タッチ操作（全画面時は無効）
+      sb.addEventListener('touchstart', (e)=>{
+        if (document.body.classList.contains('fullscreen')) return;
+        seeking=true; setSeekingState(true);
+        previewRatio(ratioFromX(e.touches[0].clientX));
+      }, {passive:true});
+      sb.addEventListener('touchmove', (e)=>{
+        if (document.body.classList.contains('fullscreen')) return;
+        if (seeking){ e.preventDefault(); previewRatio(ratioFromX(e.touches[0].clientX)); }
+      }, {passive:false});
+      sb.addEventListener('touchend', (e)=>{
+        if (document.body.classList.contains('fullscreen')) return;
+        if (seeking) commitRatio(ratioFromX(e.changedTouches[0].clientX));
+      });
+
+      // スマホ全画面時：画面左右スワイプで再生位置を変える
+      let swipeStartX = null, swipeStartTime = null;
+      document.addEventListener('touchstart', (e)=>{
+        if (!document.body.classList.contains('fullscreen') || window.innerWidth >= 769) return;
+        swipeStartX    = e.touches[0].clientX;
+        swipeStartTime = player.currentTime;
+        setSeekingState(true);
+        showControlsTemporary();
+      }, {passive:true});
+      document.addEventListener('touchmove', (e)=>{
+        if (!document.body.classList.contains('fullscreen') || window.innerWidth >= 769) return;
+        if (swipeStartX === null) return;
+        const dur   = player.duration || 0;
+        const delta = (e.touches[0].clientX - swipeStartX) / window.innerWidth * dur;
+        const ratio = Math.max(0, Math.min(1, (swipeStartTime + delta) / dur));
+        previewRatio(ratio);
+      }, {passive:true});
+      document.addEventListener('touchend', (e)=>{
+        if (!document.body.classList.contains('fullscreen') || window.innerWidth >= 769) return;
+        if (swipeStartX === null) return;
+        const dur   = player.duration || 0;
+        const delta = (e.changedTouches[0].clientX - swipeStartX) / window.innerWidth * dur;
+        const ratio = Math.max(0, Math.min(1, (swipeStartTime + delta) / dur));
+        commitRatio(ratio);
+        swipeStartX = null; swipeStartTime = null;
+      });
 
     document.getElementById('playBtn').addEventListener('click', () => {
       if (player.paused) { player.play(); document.getElementById('playBtn').textContent='⏸'; }
