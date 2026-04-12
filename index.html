@@ -519,7 +519,17 @@
       Object.assign(csvFiles, folderCsv);
 
       if (existingId) {
-        // 既存：ファイルだけ更新してメタデータは出さない
+        // 既存：ファイルを更新して現在再生中のトラックも再読み込み
+        Object.keys(folderMedia).forEach(base => {
+          // ObjectURLを解放して新しいファイルで上書き
+          if (mediaFiles[base]) URL.revokeObjectURL(mediaFiles[base]._url);
+          mediaFiles[base] = folderMedia[base];
+        });
+        Object.keys(folderCsv).forEach(base => { csvFiles[base] = folderCsv[base]; });
+        // 現在再生中のトラックが含まれていたら再読み込み
+        if (currentTrack && folderMedia[currentTrack]) {
+          loadTrack(currentTrack);
+        }
         renderLibrarySidebar();
       } else if (Object.keys(folderMedia).length) {
         // 新規：メタデータ入力
