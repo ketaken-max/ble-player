@@ -743,7 +743,7 @@
     player.addEventListener('play',   () => { lastSentIndex=-1; });
     player.addEventListener('seeked', () => { lastSentIndex=-1; });
 
-    // seekbarスライド（スムーズシーク・回転対応）
+    // seekbarスライド＋スマホ全画面スワイプ
     (function() {
       const sb = document.getElementById('seekbar');
       let seeking = false, rafId = null;
@@ -770,7 +770,7 @@
       document.addEventListener('mousemove', (e)=>{ if(seeking) previewRatio(ratioFromX(e.clientX)); });
       document.addEventListener('mouseup',   (e)=>{ if(seeking) commitRatio(ratioFromX(e.clientX)); });
 
-      // スマホ通常時：タッチ操作（全画面時は無効）
+      // スマホ通常時のみseekbar直接タッチ
       sb.addEventListener('touchstart', (e)=>{
         if (document.body.classList.contains('fullscreen')) return;
         seeking=true; setSeekingState(true);
@@ -785,7 +785,7 @@
         if (seeking) commitRatio(ratioFromX(e.changedTouches[0].clientX));
       });
 
-      // スマホ全画面時：画面左右スワイプで再生位置を変える
+      // スマホ全画面時：左右スワイプで再生位置を変える
       let swipeStartX = null, swipeStartTime = null;
       document.addEventListener('touchstart', (e)=>{
         if (!document.body.classList.contains('fullscreen') || window.innerWidth >= 769) return;
@@ -811,6 +811,7 @@
         commitRatio(ratio);
         swipeStartX = null; swipeStartTime = null;
       });
+    })();
 
     document.getElementById('playBtn').addEventListener('click', () => {
       if (player.paused) { player.play(); document.getElementById('playBtn').textContent='⏸'; }
