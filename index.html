@@ -511,30 +511,43 @@
       });
       if (!Object.keys(folderMedia).length && !Object.keys(folderCsv).length) return;
 
+      // CSVの紐づけを決定
+      const mediaBases = Object.keys(folderMedia).sort();
+      const csvBases   = Object.keys(folderCsv).sort();
+      const csvMapping = {}; // { mediaBase: csvBase }
+
+      if (csvBases.length === 0) {
+        // CSVなし：紐づけなし
+      } else if (csvBases.length === 1) {
+        // CSV1つ：全トラックに同じCSVを適用
+        mediaBases.forEach(mb => { csvMapping[mb] = csvBases[0]; });
+      } else if (csvBases.length === mediaBases.length) {
+        // CSV数とトラック数が同じ：順番に紐づけ
+        mediaBases.forEach((mb, i) => { csvMapping[mb] = csvBases[i]; });
+      } else {
+        // それ以外：ファイル名一致のみ
+        mediaBases.forEach(mb => { if (folderCsv[mb]) csvMapping[mb] = mb; });
+      }
+
+      // mediaFilesとcsvFilesに登録
+      // csvはmediaのbaseをキーとして登録する
+      mediaBases.forEach(mb => {
+        mediaFiles[mb] = folderMedia[mb];
+        const csvBase = csvMapping[mb];
+        if (csvBase) csvFiles[mb] = folderCsv[csvBase];
+      });
+
       // 既存ライブラリにあるか確認
       const existingId = Object.keys(library).find(id => library[id].folderName === folderName);
 
-      // ファイルは常に更新
-      Object.assign(mediaFiles, folderMedia);
-      Object.assign(csvFiles, folderCsv);
-
       if (existingId) {
-        // 既存：ファイルを更新して現在再生中のトラックも再読み込み
-        Object.keys(folderMedia).forEach(base => {
-          // ObjectURLを解放して新しいファイルで上書き
-          if (mediaFiles[base]) URL.revokeObjectURL(mediaFiles[base]._url);
-          mediaFiles[base] = folderMedia[base];
-        });
-        Object.keys(folderCsv).forEach(base => { csvFiles[base] = folderCsv[base]; });
-        // 現在再生中のトラックが含まれていたら再読み込み
-        if (currentTrack && folderMedia[currentTrack]) {
-          loadTrack(currentTrack);
-        }
+        // 既存：ファイルを更新
+        if (currentTrack && folderMedia[currentTrack]) loadTrack(currentTrack);
         renderLibrarySidebar();
-      } else if (Object.keys(folderMedia).length) {
+      } else if (mediaBases.length) {
         // 新規：メタデータ入力
         const workId = 'work_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-        pendingFolders.push({ workId, folderName, folderMedia, folderCsv });
+        pendingFolders.push({ workId, folderName, folderMedia, folderCsv, csvMapping });
         if (pendingFolders.length === 1) { currentMetaIndex = 0; showMetaModal(); }
       }
     }
