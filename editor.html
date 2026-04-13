@@ -547,8 +547,47 @@
       a.href = URL.createObjectURL(blob); a.download = csvName; a.click();
     }
 
-    function saveCSV() {
-      sessionStorage.setItem('saved-csv-text',  toCSVText());
+    async function saveCSV() {
+      const text = toCSVText();
+      const hasFSA    = sessionStorage.getItem('editor-fsa') === '1';
+      const hasHandle = sessionStorage.getItem('editor-has-handle') === '1';
+
+      if (hasFSA && hasHandle) {
+        // File System Access API：ファイルに直接上書き保存
+        try {
+          const handle = await loadFileFromIDB('editor-csv-handle');
+          if (handle) {
+            const writable = await handle.createWritable();
+            await writable.write(text);
+            await writable.close();
+            alert('ファイルに保存しました');
+            return;
+          }
+        } catch(e) {
+          console.warn('直接保存失敗:', e);
+        }
+      }
+
+      if (hasFSA && !hasHandle) {
+        // 新規作成：File System Access APIでファイルを作成
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: csvName,
+            types: [{ description: 'CSV', accept: { 'text/csv': ['.csv'] } }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(text);
+          await writable.close();
+          alert('ファイルに保存しました');
+          return;
+        } catch(e) {
+          if (e.name !== 'AbortError') console.warn('保存失敗:', e);
+          return;
+        }
+      }
+
+      // スマホ or フォールバック：sessionStorage経由
+      sessionStorage.setItem('saved-csv-text',  text);
       sessionStorage.setItem('saved-csv-track', trackName);
       sessionStorage.setItem('saved-csv-name',  csvName);
       alert('保存しました。メイン画面に戻ると反映されます。');
