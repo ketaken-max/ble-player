@@ -47,8 +47,6 @@
     .work-meta { font-size:10px; font-family:'JetBrains Mono',monospace; color:var(--text-dim); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .work-rj { font-size:9px; color:var(--accent); margin-top:2px; font-family:'JetBrains Mono',monospace; }
     .work-plays { font-size:9px; color:var(--text-dim); font-family:'JetBrains Mono',monospace; }
-    .file-op-btn { background:none; border:none; color:var(--text-dim); cursor:pointer; font-size:11px; padding:2px 4px; border-radius:3px; transition:all .15s; flex-shrink:0; }
-    .file-op-btn:hover { color:var(--accent); background:rgba(124,106,255,.1); }
     .sidebar-bottom { padding:10px 12px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:6px; }
     .btn-outline { width:100%; padding:8px; background:transparent; border:1px dashed var(--border); border-radius:6px; color:var(--text-dim); font-family:'Syne',sans-serif; font-size:11px; cursor:pointer; transition:all .15s; letter-spacing:.05em; }
     .btn-outline:hover { border-color:var(--accent); color:var(--accent); }
@@ -455,16 +453,6 @@
     let mediaFiles = {}, csvFiles = {};
     let pendingFolders = [], currentMetaIndex = 0, editingWorkId = null;
 
-    // File System Access API対応判定
-    const supportsFileSystemAccess = 'showDirectoryPicker' in window;
-
-    // ルートフォルダハンドル（File System Access API用）
-    let rootDirHandle = null;
-    // フォルダハンドルのキャッシュ { folderName: FileSystemDirectoryHandle }
-    const dirHandles = {};
-    // CSVファイルハンドルのキャッシュ { base: FileSystemFileHandle }
-    const csvHandles = {};
-
     const dropZone = document.getElementById('drop-zone');
     document.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('active'); });
     document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) dropZone.classList.remove('active'); });
@@ -476,87 +464,44 @@
       }
     });
 
-    document.getElementById('addFolderBtn').addEventListener('click', async () => {
-      if (supportsFileSystemAccess) {
-        // PC: File System Access API
-        try {
-          const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-          rootDirHandle = dirHandle;
-          await scanDirHandle(dirHandle, dirHandle.name, null);
-        } catch (e) {
-          if (e.name !== 'AbortError') console.error(e);
+    document.getElementById('addFolderBtn').addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file'; input.multiple = true;
+      input.accept = 'video/*,audio/*,.csv';
+      input.webkitdirectory = true;
+      input.onchange = async (e) => {
+        const files = [...e.target.files];
+        // フォルダ名ごとにグループ化
+        const folderMap = {};
+        files.forEach(file => {
+          const parts = file.webkitRelativePath.split('/');
+          // parts[0]=親フォルダ, parts[1]=作品フォルダ or ファイル
+          const folder = parts.length >= 3 ? parts[1] : parts[0];
+          if (!folderMap[folder]) folderMap[folder] = [];
+          folderMap[folder].push(file);
+        });
+        for (const [folderName, folderFiles] of Object.entries(folderMap)) {
+          await processFolderFiles(folderName, folderFiles);
         }
-      } else {
-        // スマホ: 従来方式
-        const input = document.createElement('input');
-        input.type = 'file'; input.multiple = true;
-        input.accept = 'video/*,audio/*,.csv';
-        input.webkitdirectory = true;
-        input.onchange = async (e) => {
-          const files = [...e.target.files];
-          const folderMap = {};
-          files.forEach(file => {
-            const parts = file.webkitRelativePath.split('/');
-            if (parts.length < 2) return;
-            const topFolder = parts[1];
-            const subPath   = parts.length >= 4 ? parts.slice(1,-1).join('/') : parts[1];
-            const parentId  = parts.length >= 4 ? topFolder : null;
-            const key = subPath + '|||' + (parentId || '');
-            if (!folderMap[key]) folderMap[key] = { folderName: parts.slice(1,-1).pop() || parts[1], parentId, files: [] };
-            folderMap[key].files.push(file);
-          });
-          for (const { folderName, parentId, files: folderFiles } of Object.values(folderMap)) {
-            await processFolderFiles(folderName, folderFiles, parentId);
-          }
-        };
-        input.click();
-      }
+      };
+      input.click();
     });
 
-    // File System Access APIでフォルダを再帰的にスキャン
-    async function scanDirHandle(dirHandle, folderName, parentFolderName) {
-      const files = [], subDirs = [];
-      for await (const entry of dirHandle.values()) {
-        if (entry.kind === 'file') {
-          const file = await entry.getFile();
-          file._handle = entry; // ハンドルをファイルに紐付け
-          files.push(file);
-        } else if (entry.kind === 'directory') {
-          subDirs.push({ handle: entry, name: entry.name });
-        }
-      }
-
-      // このフォルダのハンドルをキャッシュ
-      dirHandles[folderName] = dirHandle;
-
-      if (files.length) await processFolderFiles(folderName, files, parentFolderName);
-
-      for (const sub of subDirs) {
-        await scanDirHandle(sub.handle, sub.name, parentFolderName || folderName);
-      }
-    }
-
-    async function processFolderEntry(dirEntry, folderName, parentId=null) {
+    async function processFolderEntry(dirEntry, folderName) {
       return new Promise((resolve) => {
         dirEntry.createReader().readEntries(async (entries) => {
           const files = [];
-          const subDirs = [];
           for (const entry of entries) {
             if (entry.isFile) files.push(await new Promise(r => entry.file(r)));
-            else if (entry.isDirectory) subDirs.push(entry);
+            else if (entry.isDirectory) await processFolderEntry(entry, entry.name);
           }
-          // このフォルダ直下にメディアがある場合は処理
-          if (files.length) await processFolderFiles(folderName, files, parentId);
-          // サブフォルダを処理（parentIdは最上位のworkId）
-          for (const sub of subDirs) {
-            await processFolderEntry(sub, sub.name, parentId || folderName);
-          }
+          if (files.length) await processFolderFiles(folderName, files);
           resolve();
         });
       });
     }
 
-    async function processFolderFiles(folderName, files, parentFolderName=null) {
+    async function processFolderFiles(folderName, files) {
       const folderMedia = {}, folderCsv = {};
       files.forEach(file => {
         const ext  = file.name.split('.').pop().toLowerCase();
@@ -566,56 +511,43 @@
       });
       if (!Object.keys(folderMedia).length && !Object.keys(folderCsv).length) return;
 
+      // CSVの紐づけを決定
       const mediaBases = Object.keys(folderMedia).sort();
       const csvBases   = Object.keys(folderCsv).sort();
-      const csvMapping = {};
-      if (csvBases.length === 1) {
+      const csvMapping = {}; // { mediaBase: csvBase }
+
+      if (csvBases.length === 0) {
+        // CSVなし：紐づけなし
+      } else if (csvBases.length === 1) {
+        // CSV1つ：全トラックに同じCSVを適用
         mediaBases.forEach(mb => { csvMapping[mb] = csvBases[0]; });
       } else if (csvBases.length === mediaBases.length) {
+        // CSV数とトラック数が同じ：順番に紐づけ
         mediaBases.forEach((mb, i) => { csvMapping[mb] = csvBases[i]; });
       } else {
+        // それ以外：ファイル名一致のみ
         mediaBases.forEach(mb => { if (folderCsv[mb]) csvMapping[mb] = mb; });
       }
 
+      // mediaFilesとcsvFilesに登録
+      // csvはmediaのbaseをキーとして登録する
       mediaBases.forEach(mb => {
         mediaFiles[mb] = folderMedia[mb];
         const csvBase = csvMapping[mb];
-        if (csvBase) {
-          csvFiles[mb] = folderCsv[csvBase];
-          // File System Access APIのハンドルをキャッシュ
-          if (folderCsv[csvBase]?._handle) csvHandles[mb] = folderCsv[csvBase]._handle;
-        }
+        if (csvBase) csvFiles[mb] = folderCsv[csvBase];
       });
 
-      const tracks = mediaBases.map(base => ({ base }));
-
-      if (parentFolderName) {
-        // サブフォルダ：親のworkIdを探して子として登録
-        const parentId = Object.keys(library).find(id => library[id].folderName === parentFolderName);
-        if (parentId) {
-          if (!library[parentId].children) library[parentId].children = {};
-          library[parentId].children[folderName] = tracks;
-          saveLibraryToStorage();
-          renderLibrarySidebar();
-        }
-        return;
-      }
-
-      // 最上位フォルダ
+      // 既存ライブラリにあるか確認
       const existingId = Object.keys(library).find(id => library[id].folderName === folderName);
+
       if (existingId) {
+        // 既存：ファイルを更新
         if (currentTrack && folderMedia[currentTrack]) loadTrack(currentTrack);
         renderLibrarySidebar();
       } else if (mediaBases.length) {
+        // 新規：メタデータ入力
         const workId = 'work_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-        library[workId] = { id:workId, folderName, title:folderName, circle:'', cv:'', rj:'', addedAt:Date.now(), plays:0, fav:false, tracks, children:{} };
-        pendingFolders.push({ workId, folderName, folderMedia, folderCsv, csvMapping, tracks });
-        if (pendingFolders.length === 1) { currentMetaIndex = 0; showMetaModal(); }
-      } else if (!mediaBases.length && Object.keys(folderCsv).length === 0) {
-        // メディアなしでも最上位フォルダとして登録（サブフォルダのみの親）
-        const workId = 'work_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-        library[workId] = { id:workId, folderName, title:folderName, circle:'', cv:'', rj:'', addedAt:Date.now(), plays:0, fav:false, tracks:[], children:{} };
-        pendingFolders.push({ workId, folderName, folderMedia:{}, folderCsv:{}, csvMapping:{}, tracks:[] });
+        pendingFolders.push({ workId, folderName, folderMedia, folderCsv, csvMapping });
         if (pendingFolders.length === 1) { currentMetaIndex = 0; showMetaModal(); }
       }
     }
@@ -636,12 +568,15 @@
 
     function saveMeta() {
       const isEdit = !!editingWorkId;
-      const { workId, folderName } = isEdit
-        ? { workId: editingWorkId, folderName: library[editingWorkId].folderName }
+      const { workId, folderName, folderMedia } = isEdit
+        ? { workId: editingWorkId, folderName: library[editingWorkId].folderName, folderMedia: {} }
         : pendingFolders[currentMetaIndex];
 
+      const tracks = isEdit
+        ? library[editingWorkId].tracks
+        : Object.keys(folderMedia).sort().map(base => ({ base }));
+
       library[workId] = {
-        ...library[workId],
         id: workId, folderName,
         title:   document.getElementById('meta-work').value   || folderName,
         circle:  document.getElementById('meta-circle').value || '',
@@ -650,8 +585,7 @@
         addedAt: library[workId]?.addedAt || Date.now(),
         plays:   library[workId]?.plays   || 0,
         fav:     library[workId]?.fav     || false,
-        tracks:  library[workId]?.tracks  || [],
-        children:library[workId]?.children || {},
+        tracks,
       };
 
       saveLibraryToStorage();
@@ -671,8 +605,12 @@
     }
 
     function skipMeta() {
-      const { workId } = pendingFolders[currentMetaIndex];
-      library[workId].title = library[workId].folderName;
+      const { workId, folderName, folderMedia } = pendingFolders[currentMetaIndex];
+      library[workId] = {
+        id: workId, folderName, title: folderName, circle:'', cv:'', rj:'',
+        addedAt: Date.now(), plays:0, fav:false,
+        tracks: Object.keys(folderMedia).sort().map(base => ({ base })),
+      };
       saveLibraryToStorage();
       document.getElementById('meta-modal').classList.add('hidden');
       currentMetaIndex++;
@@ -694,10 +632,8 @@
     }
 
     // ══════════════════════════════
-    //  サイドバー描画（折りたたみ式）
+    //  サイドバー描画
     // ══════════════════════════════
-    const expandedWorks = new Set(); // 展開中のworkId
-
     function renderLibrarySidebar() {
       const list  = document.getElementById('libraryList');
       const query = document.getElementById('searchInput').value.toLowerCase();
@@ -727,33 +663,19 @@
       }
 
       works.forEach(w => {
-        const isExpanded  = expandedWorks.has(w.id);
-        const hasChildren = w.children && Object.keys(w.children).length > 0;
-        const hasTracks   = w.tracks && w.tracks.length > 0;
-        const hasContent  = hasChildren || hasTracks;
-
-        // 作品行
         const div = document.createElement('div');
         div.className = 'work-item' + (w.id === currentWorkId ? ' active' : '');
         div.innerHTML = `
           <div class="work-item-header">
-            <span style="font-size:10px;color:var(--text-dim);margin-right:4px;flex-shrink:0;">${hasContent?(isExpanded?'▾':'▸'):'　'}</span>
             <span class="work-title">${w.title}</span>
             <button class="fav-btn ${w.fav?'active':''}" data-id="${w.id}">★</button>
           </div>
           <div class="work-meta">${[w.circle,w.cv].filter(Boolean).join('／')||'情報なし'}</div>
           ${w.rj?`<div class="work-rj">${w.rj}</div>`:''}
           <div class="work-plays">再生 ${w.plays}回</div>`;
-
         div.addEventListener('click', (e) => {
           if (e.target.classList.contains('fav-btn')) return;
-          if (hasContent) {
-            if (isExpanded) expandedWorks.delete(w.id);
-            else expandedWorks.add(w.id);
-            renderLibrarySidebar();
-          } else {
-            selectWork(w.id); closeSidebar();
-          }
+          selectWork(w.id); closeSidebar();
         });
         div.querySelector('.fav-btn').addEventListener('click', (e) => {
           e.stopPropagation();
@@ -761,92 +683,6 @@
           saveLibraryToStorage(); renderLibrarySidebar();
         });
         list.appendChild(div);
-
-        // 展開時：直下のトラックとサブフォルダを表示
-        if (isExpanded) {
-          // 直下のトラック
-          if (hasTracks) {
-            renderSubTracks(list, w.id, w.tracks, 1);
-          }
-          // サブフォルダ
-          if (hasChildren) {
-            renderSubFolders(list, w.id, w.children, 1);
-          }
-        }
-      });
-    }
-
-    function renderSubTracks(list, workId, tracks, depth) {
-      tracks.forEach(t => {
-        const hasCSV = !!csvFiles[t.base];
-        const row = document.createElement('div');
-        row.style.cssText = `padding:6px 14px 6px ${14+depth*14}px; cursor:pointer; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-dim); display:flex; align-items:center; gap:6px; border-left:3px solid transparent; transition:all .15s;`;
-        row.innerHTML = `
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">▷ ${t.base}</span>
-          <span style="font-size:9px;padding:1px 5px;border-radius:3px;flex-shrink:0;${hasCSV?'background:rgba(79,255,176,.15);color:var(--success)':'background:rgba(255,183,77,.1);color:var(--warning)'}">${hasCSV?'CSV':'未割当'}</span>
-          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-file" data-base="${t.base}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-file" data-base="${t.base}" title="削除">✕</button>`:''}`;
-        row.addEventListener('mouseenter', ()=>{ row.style.background='var(--bg3)'; });
-        row.addEventListener('mouseleave', ()=>{ row.style.background=''; });
-        row.addEventListener('click', (e) => {
-          if (e.target.classList.contains('file-op-btn')) return;
-          currentWorkId = workId;
-          const allTracks = [...(library[workId].tracks||[])];
-          if (library[workId].children) Object.values(library[workId].children).forEach(st=>allTracks.push(...st));
-          trackList = allTracks.map(t=>t.base);
-          loadTrack(t.base);
-          closeSidebar();
-        });
-        // ファイル操作ボタン
-        if (supportsFileSystemAccess) {
-          row.querySelector('[data-action="rename-file"]')?.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            await renameFile(t.base, workId);
-          });
-          row.querySelector('[data-action="delete-file"]')?.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            await deleteFile(t.base, workId);
-          });
-        }
-        list.appendChild(row);
-      });
-    }
-
-    function renderSubFolders(list, parentWorkId, children, depth) {
-      if (!window._expandedSubs) window._expandedSubs = new Set();
-      const expandKey = parentWorkId + ':children';
-
-      Object.entries(children).forEach(([subName, subTracks]) => {
-        const key   = expandKey + ':' + subName;
-        const isExp = window._expandedSubs.has(key);
-
-        const row = document.createElement('div');
-        row.style.cssText = `padding:7px 14px 7px ${14+depth*14}px; cursor:pointer; font-size:11px; font-family:'Syne',sans-serif; color:var(--text-dim); display:flex; align-items:center; gap:6px; transition:all .15s;`;
-        row.innerHTML = `
-          <span style="font-size:10px;">${isExp?'▾':'▸'}</span>
-          <span style="font-weight:600;flex:1;">${subName}</span>
-          <span style="font-size:9px;font-family:'JetBrains Mono',monospace;">${subTracks.length}曲</span>
-          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-dir" data-name="${subName}" data-parent="${parentWorkId}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-dir" data-name="${subName}" data-parent="${parentWorkId}" title="削除">✕</button>`:''}`;
-        row.addEventListener('mouseenter', ()=>{ row.style.background='var(--bg3)'; });
-        row.addEventListener('mouseleave', ()=>{ row.style.background=''; });
-        row.addEventListener('click', (e) => {
-          if (e.target.classList.contains('file-op-btn')) return;
-          if (isExp) window._expandedSubs.delete(key);
-          else window._expandedSubs.add(key);
-          renderLibrarySidebar();
-        });
-        if (supportsFileSystemAccess) {
-          row.querySelector('[data-action="rename-dir"]')?.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            await renameDirInWork(parentWorkId, subName);
-          });
-          row.querySelector('[data-action="delete-dir"]')?.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            await deleteDirInWork(parentWorkId, subName);
-          });
-        }
-        list.appendChild(row);
-
-        if (isExp) renderSubTracks(list, parentWorkId, subTracks, depth+1);
       });
     }
 
@@ -868,15 +704,9 @@
 
       const tracksEl = document.getElementById('tracksEl');
       tracksEl.innerHTML = '';
+      trackList = w.tracks.map(t => t.base);
 
-      // 直下のトラック＋サブフォルダのトラックを全部収集
-      const allTracks = [...(w.tracks||[])];
-      if (w.children) {
-        Object.values(w.children).forEach(subTracks => allTracks.push(...subTracks));
-      }
-      trackList = allTracks.map(t => t.base);
-
-      allTracks.forEach((t,i) => {
+      w.tracks.forEach((t,i) => {
         const hasCSV = !!csvFiles[t.base];
         const div = document.createElement('div');
         div.className = 'track' + (i===0?' active':'');
@@ -1106,140 +936,6 @@
     })();
 
     // ══════════════════════════════
-    //  ファイル操作（File System Access API）
-    // ══════════════════════════════
-    async function renameFile(base, workId) {
-      const newName = prompt('新しいファイル名（拡張子なし）', base);
-      if (!newName || newName === base) return;
-
-      const mFile = mediaFiles[base];
-      const ext   = mFile?.name.split('.').pop() || '';
-
-      try {
-        // 親フォルダのハンドルを取得
-        const w          = library[workId];
-        const parentName = w.folderName;
-        const parentHandle = dirHandles[parentName];
-        if (!parentHandle) { alert('フォルダが見つかりません。再読み込みしてください。'); return; }
-
-        // 新ファイルを作成してコピー
-        const newFileHandle = await parentHandle.getFileHandle(newName + '.' + ext, { create: true });
-        const writable = await newFileHandle.createWritable();
-        const buf = await mFile.arrayBuffer();
-        await writable.write(buf);
-        await writable.close();
-
-        // 旧ファイルを削除
-        await parentHandle.removeEntry(mFile.name);
-
-        // メモリ上を更新
-        const newFile = await newFileHandle.getFile();
-        newFile._handle = newFileHandle;
-        mediaFiles[newName] = newFile;
-        delete mediaFiles[base];
-        if (csvFiles[base])  { csvFiles[newName]  = csvFiles[base];  delete csvFiles[base]; }
-        if (csvHandles[base]){ csvHandles[newName] = csvHandles[base]; delete csvHandles[base]; }
-
-        // ライブラリ更新
-        updateTrackBase(workId, base, newName);
-        saveLibraryToStorage();
-        renderLibrarySidebar();
-      } catch(e) { alert('リネームに失敗しました: ' + e.message); }
-    }
-
-    async function deleteFile(base, workId) {
-      if (!confirm(`"${base}" を削除しますか？`)) return;
-      try {
-        const mFile      = mediaFiles[base];
-        const w          = library[workId];
-        const parentHandle = dirHandles[w.folderName];
-        if (!parentHandle) { alert('フォルダが見つかりません。'); return; }
-
-        await parentHandle.removeEntry(mFile.name);
-        if (csvFiles[base]) {
-          await parentHandle.removeEntry(csvFiles[base].name).catch(()=>{});
-        }
-
-        delete mediaFiles[base]; delete csvFiles[base]; delete csvHandles[base];
-        removeTrackFromWork(workId, base);
-        saveLibraryToStorage();
-        renderLibrarySidebar();
-      } catch(e) { alert('削除に失敗しました: ' + e.message); }
-    }
-
-    async function renameDirInWork(workId, subName) {
-      const newName = prompt('新しいフォルダ名', subName);
-      if (!newName || newName === subName) return;
-      // フォルダリネームはFile System Access APIでは直接できないため
-      // 新フォルダを作成→ファイルをコピー→旧フォルダを削除
-      try {
-        const w = library[workId];
-        const parentHandle = dirHandles[w.folderName];
-        if (!parentHandle) { alert('フォルダが見つかりません。'); return; }
-
-        const oldHandle = dirHandles[subName];
-        const newDirHandle = await parentHandle.getDirectoryHandle(newName, { create: true });
-
-        // ファイルをコピー
-        if (oldHandle) {
-          for await (const entry of oldHandle.values()) {
-            if (entry.kind === 'file') {
-              const file = await entry.getFile();
-              const newHandle = await newDirHandle.getFileHandle(entry.name, { create: true });
-              const writable  = await newHandle.createWritable();
-              await writable.write(await file.arrayBuffer());
-              await writable.close();
-            }
-          }
-          await parentHandle.removeEntry(subName, { recursive: true });
-        }
-
-        // ライブラリ更新
-        dirHandles[newName] = newDirHandle;
-        delete dirHandles[subName];
-        if (w.children[subName]) {
-          w.children[newName] = w.children[subName];
-          delete w.children[subName];
-        }
-        saveLibraryToStorage();
-        renderLibrarySidebar();
-      } catch(e) { alert('リネームに失敗しました: ' + e.message); }
-    }
-
-    async function deleteDirInWork(workId, subName) {
-      if (!confirm(`"${subName}" フォルダを削除しますか？`)) return;
-      try {
-        const w = library[workId];
-        const parentHandle = dirHandles[w.folderName];
-        if (parentHandle) await parentHandle.removeEntry(subName, { recursive: true }).catch(()=>{});
-
-        // メモリ上のトラックを削除
-        if (w.children[subName]) {
-          w.children[subName].forEach(t => {
-            delete mediaFiles[t.base]; delete csvFiles[t.base]; delete csvHandles[t.base];
-          });
-          delete w.children[subName];
-        }
-        delete dirHandles[subName];
-        saveLibraryToStorage();
-        renderLibrarySidebar();
-      } catch(e) { alert('削除に失敗しました: ' + e.message); }
-    }
-
-    function updateTrackBase(workId, oldBase, newBase) {
-      const w = library[workId];
-      const update = tracks => tracks.map(t => t.base === oldBase ? { base: newBase } : t);
-      if (w.tracks) w.tracks = update(w.tracks);
-      if (w.children) Object.keys(w.children).forEach(k => { w.children[k] = update(w.children[k]); });
-    }
-
-    function removeTrackFromWork(workId, base) {
-      const w = library[workId];
-      if (w.tracks) w.tracks = w.tracks.filter(t => t.base !== base);
-      if (w.children) Object.keys(w.children).forEach(k => { w.children[k] = w.children[k].filter(t => t.base !== base); });
-    }
-
-    // ══════════════════════════════
     //  CSV編集遷移
     // ══════════════════════════════
     function openCsvSelect() {
@@ -1257,16 +953,17 @@
       sessionStorage.setItem('editor-track',   currentTrack);
       sessionStorage.setItem('editor-mode',     mode);
       sessionStorage.setItem('editor-work-id',  currentWorkId);
-      // File System Access API対応フラグ
-      sessionStorage.setItem('editor-fsa', supportsFileSystemAccess ? '1' : '0');
 
+      // メディアファイル名だけ渡す（base64は使わない）
       const mFile = mediaFiles[currentTrack];
       if (mFile) {
         sessionStorage.setItem('editor-media-name', mFile.name);
         sessionStorage.setItem('editor-media-type', mFile.type);
+        // FileをObjectURLで渡すのではなくIndexedDBに保存
         await saveFileToIDB('editor-media', mFile);
       }
 
+      // CSVテキストを渡す
       const cFile = csvFiles[currentTrack];
       if (cFile && (mode==='existing'||mode==='copy')) {
         const text = await cFile.text();
@@ -1275,15 +972,6 @@
       } else {
         sessionStorage.removeItem('editor-csv-text');
         sessionStorage.removeItem('editor-csv-name');
-      }
-
-      // CSVファイルハンドルをIDBに保存（直接上書き保存用）
-      if (supportsFileSystemAccess && mode === 'existing' && csvHandles[currentTrack]) {
-        await saveFileToIDB('editor-csv-handle', csvHandles[currentTrack]);
-        sessionStorage.setItem('editor-has-handle', '1');
-      } else {
-        sessionStorage.removeItem('editor-has-handle');
-        await saveFileToIDB('editor-csv-handle', null).catch(()=>{});
       }
 
       window.location.href = 'editor.html';
