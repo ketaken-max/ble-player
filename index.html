@@ -49,13 +49,6 @@
     .work-plays { font-size:9px; color:var(--text-dim); font-family:'JetBrains Mono',monospace; }
     .file-op-btn { background:none; border:none; color:var(--text-dim); cursor:pointer; font-size:11px; padding:2px 4px; border-radius:3px; transition:all .15s; flex-shrink:0; }
     .file-op-btn:hover { color:var(--accent); background:rgba(124,106,255,.1); }
-
-    /* 右クリックメニュー */
-    #ctx-menu { position:fixed; background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:4px 0; z-index:9999; min-width:160px; box-shadow:0 8px 24px rgba(0,0,0,.4); display:none; }
-    #ctx-menu.show { display:block; }
-    .ctx-item { padding:8px 16px; font-size:12px; cursor:pointer; transition:background .1s; white-space:nowrap; }
-    .ctx-item:hover { background:var(--bg3); color:var(--accent); }
-    .ctx-separator { height:1px; background:var(--border); margin:4px 0; }
     .sidebar-bottom { padding:10px 12px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:6px; }
     .btn-outline { width:100%; padding:8px; background:transparent; border:1px dashed var(--border); border-radius:6px; color:var(--text-dim); font-family:'Syne',sans-serif; font-size:11px; cursor:pointer; transition:all .15s; letter-spacing:.05em; }
     .btn-outline:hover { border-color:var(--accent); color:var(--accent); }
@@ -260,9 +253,6 @@
       </div>
     </div>
   </div>
-
-  <!-- 右クリックメニュー -->
-  <div id="ctx-menu"></div>
 
   <!-- ドロップゾーン -->
   <div id="drop-zone">フォルダをドロップ</div>
@@ -721,13 +711,14 @@
         w.rj.toLowerCase().includes(query)
       );
 
-      // 読み込み済みのファイルがある作品のみ表示
-      works = works.filter(w => {
-        const allTracks = [...(w.tracks||[]), ...Object.values(w.children||{}).flat()];
-        return allTracks.some(t => mediaFiles[t.base]);
-      });
-
       works.sort((a,b) => {
+        if (sort==='added')  return a.addedAt - b.addedAt;
+        if (sort==='title')  return a.title.localeCompare(b.title,'ja');
+        if (sort==='circle') return a.circle.localeCompare(b.circle,'ja');
+        if (sort==='plays')  return b.plays - a.plays;
+        if (sort==='fav')    return (b.fav?1:0)-(a.fav?1:0);
+        return 0;
+      });
 
       list.innerHTML = '';
       if (!works.length) {
@@ -756,28 +747,13 @@
 
         div.addEventListener('click', (e) => {
           if (e.target.classList.contains('fav-btn')) return;
-          selectWork(w.id);
-          closeSidebar();
           if (hasContent) {
             if (isExpanded) expandedWorks.delete(w.id);
             else expandedWorks.add(w.id);
             renderLibrarySidebar();
+          } else {
+            selectWork(w.id); closeSidebar();
           }
-        });
-
-        // 右クリックメニュー（作品行）
-        div.addEventListener('contextmenu', (e) => {
-          e.preventDefault();
-          const items = [
-            { label: '情報を編集', action: () => { currentWorkId=w.id; openEditMeta(); } },
-          ];
-          if (supportsFileSystemAccess) {
-            items.push({ separator: true });
-            items.push({ label: 'フォルダをリネーム', action: () => renameWorkFolder(w.id) });
-            items.push({ label: 'フォルダを削除', action: () => deleteWorkFolder(w.id) });
-            items.push({ label: 'サブフォルダを作成', action: () => createSubFolder(w.id) });
-          }
-          showContextMenu(e.clientX, e.clientY, items);
         });
         div.querySelector('.fav-btn').addEventListener('click', (e) => {
           e.stopPropagation();
@@ -882,7 +858,7 @@
     function selectWork(workId) {
       currentWorkId = workId;
       const w = library[workId];
-      w.plays++; saveLibraryToStorage();
+      w.plays++; saveLibraryToStorage(); renderLibrarySidebar();
 
       document.getElementById('work-title-display').textContent  = w.title;
       document.getElementById('work-rj-display').textContent     = w.rj;
@@ -893,25 +869,19 @@
       const tracksEl = document.getElementById('tracksEl');
       tracksEl.innerHTML = '';
 
+      // 直下のトラック＋サブフォルダのトラックを全部収集
       const allTracks = [...(w.tracks||[])];
-      if (w.children) Object.values(w.children).forEach(st => allTracks.push(...st));
-      // 読み込み済みファイルのみ表示
-      const loadedTracks = allTracks.filter(t => mediaFiles[t.base]);
-      trackList = loadedTracks.map(t => t.base);
+      if (w.children) {
+        Object.values(w.children).forEach(subTracks => allTracks.push(...subTracks));
+      }
+      trackList = allTracks.map(t => t.base);
 
-      loadedTracks.forEach((t,i) => {
+      allTracks.forEach((t,i) => {
         const hasCSV = !!csvFiles[t.base];
         const div = document.createElement('div');
         div.className = 'track' + (i===0?' active':'');
         div.innerHTML = `<span>${String(i+1).padStart(2,'0')}. ${t.base}</span><span class="csv-badge ${hasCSV?'':'missing'}">${hasCSV?'CSV':'未割当'}</span>`;
         div.addEventListener('click', () => loadTrack(t.base));
-        // 右クリックメニュー
-        div.addEventListener('contextmenu', (e) => {
-          e.preventDefault();
-          showContextMenu(e.clientX, e.clientY, [
-            { label: 'CSVを編集', action: () => { currentTrack=t.base; openCsvSelect(); } },
-          ]);
-        });
         tracksEl.appendChild(div);
       });
 
@@ -934,92 +904,12 @@
       document.querySelectorAll('.track').forEach(t => {
         t.classList.toggle('active', t.querySelector('span').textContent.includes(base));
       });
-
-      const isAudio = file.type.startsWith('audio/');
-
-      if (isAudio) {
-        // 音声ファイル：playerを非表示にしてサムネイル表示
-        player.src = URL.createObjectURL(file);
-        player.load();
-        player.style.display = 'none';
-        document.querySelector('.no-media').style.display = 'none';
-        // サムネイル画像を探す
-        showAudioThumbnail(base);
-      } else {
-        // 動画ファイル
-        player.src = URL.createObjectURL(file);
-        player.load();
-        player.style.display = 'block';
-        document.querySelector('.no-media').style.display = 'none';
-        hideThumbnail();
-      }
-
+      player.src = URL.createObjectURL(file);
+      player.load();
+      document.querySelector('.no-media').style.display = 'none';
+      player.style.display = 'block';
       if (csvFiles[base]) loadCSV(csvFiles[base]);
       else { schedule=[]; renderTimeline(); }
-    }
-
-    // サムネイル要素
-    let thumbnailEl = null;
-    function showAudioThumbnail(base) {
-      hideThumbnail();
-      // 同名の画像ファイルを探す（jpg/png/webp）
-      const imgExts = ['jpg','jpeg','png','webp','gif'];
-      let imgFile = null;
-      for (const ext of imgExts) {
-        if (mediaFiles[base + '_thumb'] || mediaFiles[base]) {
-          // 同じフォルダの画像を探す
-          const w = library[currentWorkId];
-          if (w) {
-            const folderHandle = dirHandles[w.folderName];
-            if (folderHandle) {
-              // 非同期で画像を検索
-              searchThumbnailInFolder(folderHandle, base);
-              return;
-            }
-          }
-        }
-        break;
-      }
-    }
-
-    async function searchThumbnailInFolder(folderHandle, base) {
-      const imgExts = ['jpg','jpeg','png','webp','gif'];
-      try {
-        for await (const entry of folderHandle.values()) {
-          if (entry.kind === 'file') {
-            const ext = entry.name.split('.').pop().toLowerCase();
-            if (imgExts.includes(ext)) {
-              const imgFile = await entry.getFile();
-              displayThumbnail(imgFile);
-              return;
-            }
-          }
-        }
-      } catch(e) {}
-      // 画像が見つからない場合はデフォルト表示
-      showDefaultAudioView();
-    }
-
-    function displayThumbnail(imgFile) {
-      hideThumbnail();
-      const videoWrap = document.getElementById('video-wrap');
-      thumbnailEl = document.createElement('img');
-      thumbnailEl.src = URL.createObjectURL(imgFile);
-      thumbnailEl.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
-      videoWrap.appendChild(thumbnailEl);
-    }
-
-    function showDefaultAudioView() {
-      hideThumbnail();
-      const videoWrap = document.getElementById('video-wrap');
-      thumbnailEl = document.createElement('div');
-      thumbnailEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--text-dim);';
-      thumbnailEl.innerHTML = '<div style="font-size:64px;opacity:.4;">♪</div><div style="font-size:12px;font-family:\'JetBrains Mono\',monospace;">' + (currentTrack||'') + '</div>';
-      videoWrap.appendChild(thumbnailEl);
-    }
-
-    function hideThumbnail() {
-      if (thumbnailEl) { thumbnailEl.remove(); thumbnailEl = null; }
     }
 
     player.addEventListener('timeupdate', () => {
@@ -1216,100 +1106,8 @@
     })();
 
     // ══════════════════════════════
-    //  右クリックメニュー
+    //  ファイル操作（File System Access API）
     // ══════════════════════════════
-    const ctxMenu = document.getElementById('ctx-menu');
-    document.addEventListener('click', () => ctxMenu.classList.remove('show'));
-    document.addEventListener('contextmenu', () => ctxMenu.classList.remove('show'));
-
-    function showContextMenu(x, y, items) {
-      ctxMenu.innerHTML = '';
-      items.forEach(item => {
-        if (item.separator) {
-          const sep = document.createElement('div');
-          sep.className = 'ctx-separator';
-          ctxMenu.appendChild(sep);
-          return;
-        }
-        const el = document.createElement('div');
-        el.className = 'ctx-item';
-        el.textContent = item.label;
-        el.addEventListener('click', (e) => { e.stopPropagation(); ctxMenu.classList.remove('show'); item.action(); });
-        ctxMenu.appendChild(el);
-      });
-
-      // 画面外に出ないよう位置調整
-      ctxMenu.style.left = x + 'px';
-      ctxMenu.style.top  = y + 'px';
-      ctxMenu.classList.add('show');
-      const rect = ctxMenu.getBoundingClientRect();
-      if (rect.right  > window.innerWidth)  ctxMenu.style.left = (x - rect.width)  + 'px';
-      if (rect.bottom > window.innerHeight) ctxMenu.style.top  = (y - rect.height) + 'px';
-    }
-
-    // 作品フォルダのリネーム
-    async function renameWorkFolder(workId) {
-      const w = library[workId];
-      const newName = prompt('新しいフォルダ名', w.folderName);
-      if (!newName || newName === w.folderName) return;
-      if (!rootDirHandle) { alert('フォルダが見つかりません。再読み込みしてください。'); return; }
-      try {
-        const oldHandle = dirHandles[w.folderName];
-        const newDirHandle = await rootDirHandle.getDirectoryHandle(newName, { create: true });
-        // ファイルをコピー
-        if (oldHandle) {
-          await copyDirContents(oldHandle, newDirHandle);
-          await rootDirHandle.removeEntry(w.folderName, { recursive: true });
-        }
-        dirHandles[newName] = newDirHandle;
-        delete dirHandles[w.folderName];
-        w.folderName = newName;
-        w.title = w.title === w.folderName ? newName : w.title;
-        saveLibraryToStorage(); renderLibrarySidebar();
-      } catch(e) { alert('リネームに失敗しました: ' + e.message); }
-    }
-
-    async function deleteWorkFolder(workId) {
-      const w = library[workId];
-      if (!confirm(`"${w.title}" を削除しますか？`)) return;
-      if (!rootDirHandle) { alert('フォルダが見つかりません。'); return; }
-      try {
-        await rootDirHandle.removeEntry(w.folderName, { recursive: true }).catch(()=>{});
-        delete library[workId];
-        delete dirHandles[w.folderName];
-        saveLibraryToStorage(); renderLibrarySidebar();
-      } catch(e) { alert('削除に失敗しました: ' + e.message); }
-    }
-
-    async function createSubFolder(workId) {
-      const w = library[workId];
-      const name = prompt('新しいサブフォルダ名');
-      if (!name) return;
-      try {
-        const parentHandle = dirHandles[w.folderName] || await rootDirHandle?.getDirectoryHandle(w.folderName);
-        if (!parentHandle) { alert('フォルダが見つかりません。'); return; }
-        const newHandle = await parentHandle.getDirectoryHandle(name, { create: true });
-        dirHandles[name] = newHandle;
-        if (!w.children) w.children = {};
-        w.children[name] = [];
-        saveLibraryToStorage(); renderLibrarySidebar();
-      } catch(e) { alert('作成に失敗しました: ' + e.message); }
-    }
-
-    async function copyDirContents(srcHandle, dstHandle) {
-      for await (const entry of srcHandle.values()) {
-        if (entry.kind === 'file') {
-          const file = await entry.getFile();
-          const newHandle = await dstHandle.getFileHandle(entry.name, { create: true });
-          const writable  = await newHandle.createWritable();
-          await writable.write(await file.arrayBuffer());
-          await writable.close();
-        } else if (entry.kind === 'directory') {
-          const subDst = await dstHandle.getDirectoryHandle(entry.name, { create: true });
-          await copyDirContents(entry, subDst);
-        }
-      }
-    }
     async function renameFile(base, workId) {
       const newName = prompt('新しいファイル名（拡張子なし）', base);
       if (!newName || newName === base) return;
