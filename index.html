@@ -614,9 +614,6 @@
       // 最上位フォルダ
       const existingId = Object.keys(library).find(id => library[id].folderName === folderName);
       if (existingId) {
-        // 既存フォルダの場合はトラック情報を更新
-        library[existingId].tracks = tracks;
-        saveLibraryToStorage();
         if (currentTrack && folderMedia[currentTrack]) loadTrack(currentTrack);
         renderLibrarySidebar();
       } else if (mediaBases.length) {
@@ -634,12 +631,7 @@
     }
 
     function showMetaModal() {
-      if (currentMetaIndex >= pendingFolders.length) { 
-        pendingFolders = []; 
-        currentMetaIndex = 0;
-        renderLibrarySidebar(); 
-        return; 
-      }
+      if (currentMetaIndex >= pendingFolders.length) { pendingFolders = []; renderLibrarySidebar(); return; }
       const { folderName } = pendingFolders[currentMetaIndex];
       document.getElementById('modal-title').textContent    = '作品情報を入力';
       document.getElementById('modal-folder').textContent   = 'フォルダ: ' + folderName;
