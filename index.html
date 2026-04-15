@@ -728,13 +728,6 @@
       });
 
       works.sort((a,b) => {
-        if (sort==='added')  return a.addedAt - b.addedAt;
-        if (sort==='title')  return a.title.localeCompare(b.title,'ja');
-        if (sort==='circle') return a.circle.localeCompare(b.circle,'ja');
-        if (sort==='plays')  return b.plays - a.plays;
-        if (sort==='fav')    return (b.fav?1:0)-(a.fav?1:0);
-        return 0;
-      });
 
       list.innerHTML = '';
       if (!works.length) {
