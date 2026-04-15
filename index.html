@@ -417,7 +417,11 @@
       } else {
         document.getElementById('bleLabel').textContent = '未接続（テスト）';
       }
-      document.getElementById('addFolderBtn').click();
+      // PC（非タッチ）のみ自動でフォルダ選択ダイアログを開く
+      // スマホはユーザージェスチャー外でinput.click()が無効になるため手動で開く
+      if (!isTouchDevice()) {
+        document.getElementById('addFolderBtn').click();
+      }
     }
 
     function onDisconnected() {
@@ -469,6 +473,8 @@
 
     // File System Access API対応判定
     const supportsFileSystemAccess = 'showDirectoryPicker' in window;
+    // タッチデバイス判定（Android ChromeはsupportsFileSystemAccessがtrueになるため別途判定）
+    const isTouchDevice = () => navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 
     // ルートフォルダハンドル（File System Access API用）
     let rootDirHandle = null;
@@ -491,9 +497,6 @@
         currentMetaIndex = 0; showMetaModal();
       }
     });
-
-    // タッチデバイス判定（Android ChromeはsupportsFileSystemAccessがtrueになるため別途判定）
-    const isTouchDevice = () => navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 
     document.getElementById('addFolderBtn').addEventListener('click', async () => {
       if (supportsFileSystemAccess && !isTouchDevice()) {
@@ -766,15 +769,14 @@
         w.rj.toLowerCase().includes(query)
       );
 
-      // 読み込み済みのファイルがある作品のみ表示（childrenのトラックも含めて判定）
+      // トラックまたはサブフォルダを持つ作品のみ表示
+      // （スマホは毎回読み込み直すためmediaFilesでのフィルタは行わない）
       works = works.filter(w => {
-        const topTracks = w.tracks || [];
-        const childTracks = Object.values(w.children || {}).flat();
-        const allTracks = [...topTracks, ...childTracks];
-        // トラックが1件でもmediaFilesに登録されていれば表示
-        // トラック自体が0件の場合もlibraryに明示的に追加された作品（childrenを持つ親）は表示
-        return allTracks.some(t => mediaFiles[t.base]) || 
-               (allTracks.length === 0 && Object.keys(w.children || {}).length > 0);
+        const hasTracks   = (w.tracks   || []).length > 0;
+        const hasChildren = Object.keys(w.children || {}).some(
+          k => (w.children[k] || []).length > 0
+        );
+        return hasTracks || hasChildren;
       });
 
       works.sort((a,b) => {
@@ -952,16 +954,18 @@
 
       const allTracks = [...(w.tracks||[])];
       if (w.children) Object.values(w.children).forEach(st => allTracks.push(...st));
-      // 読み込み済みファイルのみ表示
+      // mediaFilesに読み込まれているトラックを優先、なければlibrary上の全トラックを表示
       const loadedTracks = allTracks.filter(t => mediaFiles[t.base]);
-      trackList = loadedTracks.map(t => t.base);
+      const displayTracks = loadedTracks.length > 0 ? loadedTracks : allTracks;
+      trackList = displayTracks.map(t => t.base);
 
-      loadedTracks.forEach((t,i) => {
-        const hasCSV = !!csvFiles[t.base];
+      displayTracks.forEach((t,i) => {
+        const hasCSV    = !!csvFiles[t.base];
+        const isLoaded  = !!mediaFiles[t.base];
         const div = document.createElement('div');
-        div.className = 'track' + (i===0?' active':'');
+        div.className = 'track' + (i===0?' active':'') + (isLoaded?'':' unloaded');
         div.innerHTML = `<span>${String(i+1).padStart(2,'0')}. ${t.base}</span><span class="csv-badge ${hasCSV?'':'missing'}">${hasCSV?'CSV':'未割当'}</span>`;
-        div.addEventListener('click', () => loadTrack(t.base));
+        div.addEventListener('click', () => { if(isLoaded) loadTrack(t.base); });
         // 右クリックメニュー
         div.addEventListener('contextmenu', (e) => {
           e.preventDefault();
