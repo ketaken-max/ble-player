@@ -492,8 +492,11 @@
       }
     });
 
+    // タッチデバイス判定（Android ChromeはsupportsFileSystemAccessがtrueになるため別途判定）
+    const isTouchDevice = () => navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+
     document.getElementById('addFolderBtn').addEventListener('click', async () => {
-      if (supportsFileSystemAccess) {
+      if (supportsFileSystemAccess && !isTouchDevice()) {
         // PC: File System Access API
         try {
           const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
@@ -503,7 +506,7 @@
           if (e.name !== 'AbortError') console.error(e);
         }
       } else {
-        // スマホ: 従来方式
+        // スマホ: input[webkitdirectory]方式
         const input = document.createElement('input');
         input.type = 'file'; input.multiple = true;
         input.accept = 'video/*,audio/*,.csv';
@@ -512,13 +515,15 @@
           const files = [...e.target.files];
           const folderMap = {};
           files.forEach(file => {
+            // webkitRelativePath = "topFolder/file.mp4" or "topFolder/sub/file.mp4"
             const parts = file.webkitRelativePath.split('/');
             if (parts.length < 2) return;
-            const topFolder = parts[1];
-            const subPath   = parts.length >= 4 ? parts.slice(1,-1).join('/') : parts[1];
-            const parentId  = parts.length >= 4 ? topFolder : null;
-            const key = subPath + '|||' + (parentId || '');
-            if (!folderMap[key]) folderMap[key] = { folderName: parts.slice(1,-1).pop() || parts[1], parentId, files: [] };
+            const topFolder  = parts[0];                              // index 0 が最上位フォルダ名
+            const isInSub    = parts.length >= 3;
+            const folderName = isInSub ? parts[parts.length - 2] : parts[0];
+            const parentId   = isInSub ? topFolder : null;
+            const key = parts.slice(0, -1).join('/') + '|||' + (parentId || '');
+            if (!folderMap[key]) folderMap[key] = { folderName, parentId, files: [] };
             folderMap[key].files.push(file);
           });
           // 最上位フォルダを先に登録してからサブフォルダを処理
@@ -658,11 +663,8 @@
         const workId = 'work_' + Date.now() + '_' + Math.random().toString(36).slice(2);
         library[workId] = { id:workId, folderName, title:folderName, circle:'', cv:'', rj:'', addedAt:Date.now(), plays:0, fav:false, tracks, children:{} };
         pendingFolders.push({ workId, folderName, folderMedia, folderCsv, csvMapping, tracks });
-        // File System Access API経由の場合はscanDirHandleがまとめてshowMetaModalを呼ぶ
-        // ドラッグ&ドロップ・スマホ（input）の場合はここで起動
-        if (!supportsFileSystemAccess) {
-          if (pendingFolders.length === 1) { currentMetaIndex = 0; showMetaModal(); }
-        }
+        // FSA+PCの場合はscanDirHandleがまとめてshowMetaModalを呼ぶ
+        // D&D・スマホ（input）はここでは起動しない（呼び出し元でまとめて起動）
       }
     }
 
