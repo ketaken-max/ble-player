@@ -47,6 +47,15 @@
     .work-meta { font-size:10px; font-family:'JetBrains Mono',monospace; color:var(--text-dim); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .work-rj { font-size:9px; color:var(--accent); margin-top:2px; font-family:'JetBrains Mono',monospace; }
     .work-plays { font-size:9px; color:var(--text-dim); font-family:'JetBrains Mono',monospace; }
+    .file-op-btn { background:none; border:none; color:var(--text-dim); cursor:pointer; font-size:11px; padding:2px 4px; border-radius:3px; transition:all .15s; flex-shrink:0; }
+    .file-op-btn:hover { color:var(--accent); background:rgba(124,106,255,.1); }
+
+    /* 右クリックメニュー */
+    #ctx-menu { position:fixed; background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:4px 0; z-index:9999; min-width:160px; box-shadow:0 8px 24px rgba(0,0,0,.4); display:none; }
+    #ctx-menu.show { display:block; }
+    .ctx-item { padding:8px 16px; font-size:12px; cursor:pointer; transition:background .1s; white-space:nowrap; }
+    .ctx-item:hover { background:var(--bg3); color:var(--accent); }
+    .ctx-separator { height:1px; background:var(--border); margin:4px 0; }
     .sidebar-bottom { padding:10px 12px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:6px; }
     .btn-outline { width:100%; padding:8px; background:transparent; border:1px dashed var(--border); border-radius:6px; color:var(--text-dim); font-family:'Syne',sans-serif; font-size:11px; cursor:pointer; transition:all .15s; letter-spacing:.05em; }
     .btn-outline:hover { border-color:var(--accent); color:var(--accent); }
@@ -252,6 +261,9 @@
     </div>
   </div>
 
+  <!-- 右クリックメニュー -->
+  <div id="ctx-menu"></div>
+
   <!-- ドロップゾーン -->
   <div id="drop-zone">フォルダをドロップ</div>
 
@@ -453,6 +465,16 @@
     let mediaFiles = {}, csvFiles = {};
     let pendingFolders = [], currentMetaIndex = 0, editingWorkId = null;
 
+    // File System Access API対応判定
+    const supportsFileSystemAccess = 'showDirectoryPicker' in window;
+
+    // ルートフォルダハンドル（File System Access API用）
+    let rootDirHandle = null;
+    // フォルダハンドルのキャッシュ { folderName: FileSystemDirectoryHandle }
+    const dirHandles = {};
+    // CSVファイルハンドルのキャッシュ { base: FileSystemFileHandle }
+    const csvHandles = {};
+
     const dropZone = document.getElementById('drop-zone');
     document.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('active'); });
     document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) dropZone.classList.remove('active'); });
@@ -464,44 +486,87 @@
       }
     });
 
-    document.getElementById('addFolderBtn').addEventListener('click', () => {
-      const input = document.createElement('input');
-      input.type = 'file'; input.multiple = true;
-      input.accept = 'video/*,audio/*,.csv';
-      input.webkitdirectory = true;
-      input.onchange = async (e) => {
-        const files = [...e.target.files];
-        // フォルダ名ごとにグループ化
-        const folderMap = {};
-        files.forEach(file => {
-          const parts = file.webkitRelativePath.split('/');
-          // parts[0]=親フォルダ, parts[1]=作品フォルダ or ファイル
-          const folder = parts.length >= 3 ? parts[1] : parts[0];
-          if (!folderMap[folder]) folderMap[folder] = [];
-          folderMap[folder].push(file);
-        });
-        for (const [folderName, folderFiles] of Object.entries(folderMap)) {
-          await processFolderFiles(folderName, folderFiles);
+    document.getElementById('addFolderBtn').addEventListener('click', async () => {
+      if (supportsFileSystemAccess) {
+        // PC: File System Access API
+        try {
+          const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+          rootDirHandle = dirHandle;
+          await scanDirHandle(dirHandle, dirHandle.name, null);
+        } catch (e) {
+          if (e.name !== 'AbortError') console.error(e);
         }
-      };
-      input.click();
+      } else {
+        // スマホ: 従来方式
+        const input = document.createElement('input');
+        input.type = 'file'; input.multiple = true;
+        input.accept = 'video/*,audio/*,.csv';
+        input.webkitdirectory = true;
+        input.onchange = async (e) => {
+          const files = [...e.target.files];
+          const folderMap = {};
+          files.forEach(file => {
+            const parts = file.webkitRelativePath.split('/');
+            if (parts.length < 2) return;
+            const topFolder = parts[1];
+            const subPath   = parts.length >= 4 ? parts.slice(1,-1).join('/') : parts[1];
+            const parentId  = parts.length >= 4 ? topFolder : null;
+            const key = subPath + '|||' + (parentId || '');
+            if (!folderMap[key]) folderMap[key] = { folderName: parts.slice(1,-1).pop() || parts[1], parentId, files: [] };
+            folderMap[key].files.push(file);
+          });
+          for (const { folderName, parentId, files: folderFiles } of Object.values(folderMap)) {
+            await processFolderFiles(folderName, folderFiles, parentId);
+          }
+        };
+        input.click();
+      }
     });
 
-    async function processFolderEntry(dirEntry, folderName) {
+    // File System Access APIでフォルダを再帰的にスキャン
+    async function scanDirHandle(dirHandle, folderName, parentFolderName) {
+      const files = [], subDirs = [];
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'file') {
+          const file = await entry.getFile();
+          file._handle = entry; // ハンドルをファイルに紐付け
+          files.push(file);
+        } else if (entry.kind === 'directory') {
+          subDirs.push({ handle: entry, name: entry.name });
+        }
+      }
+
+      // このフォルダのハンドルをキャッシュ
+      dirHandles[folderName] = dirHandle;
+
+      if (files.length) await processFolderFiles(folderName, files, parentFolderName);
+
+      for (const sub of subDirs) {
+        await scanDirHandle(sub.handle, sub.name, parentFolderName || folderName);
+      }
+    }
+
+    async function processFolderEntry(dirEntry, folderName, parentId=null) {
       return new Promise((resolve) => {
         dirEntry.createReader().readEntries(async (entries) => {
           const files = [];
+          const subDirs = [];
           for (const entry of entries) {
             if (entry.isFile) files.push(await new Promise(r => entry.file(r)));
-            else if (entry.isDirectory) await processFolderEntry(entry, entry.name);
+            else if (entry.isDirectory) subDirs.push(entry);
           }
-          if (files.length) await processFolderFiles(folderName, files);
+          // このフォルダ直下にメディアがある場合は処理
+          if (files.length) await processFolderFiles(folderName, files, parentId);
+          // サブフォルダを処理（parentIdは最上位のworkId）
+          for (const sub of subDirs) {
+            await processFolderEntry(sub, sub.name, parentId || folderName);
+          }
           resolve();
         });
       });
     }
 
-    async function processFolderFiles(folderName, files) {
+    async function processFolderFiles(folderName, files, parentFolderName=null) {
       const folderMedia = {}, folderCsv = {};
       files.forEach(file => {
         const ext  = file.name.split('.').pop().toLowerCase();
@@ -511,43 +576,56 @@
       });
       if (!Object.keys(folderMedia).length && !Object.keys(folderCsv).length) return;
 
-      // CSVの紐づけを決定
       const mediaBases = Object.keys(folderMedia).sort();
       const csvBases   = Object.keys(folderCsv).sort();
-      const csvMapping = {}; // { mediaBase: csvBase }
-
-      if (csvBases.length === 0) {
-        // CSVなし：紐づけなし
-      } else if (csvBases.length === 1) {
-        // CSV1つ：全トラックに同じCSVを適用
+      const csvMapping = {};
+      if (csvBases.length === 1) {
         mediaBases.forEach(mb => { csvMapping[mb] = csvBases[0]; });
       } else if (csvBases.length === mediaBases.length) {
-        // CSV数とトラック数が同じ：順番に紐づけ
         mediaBases.forEach((mb, i) => { csvMapping[mb] = csvBases[i]; });
       } else {
-        // それ以外：ファイル名一致のみ
         mediaBases.forEach(mb => { if (folderCsv[mb]) csvMapping[mb] = mb; });
       }
 
-      // mediaFilesとcsvFilesに登録
-      // csvはmediaのbaseをキーとして登録する
       mediaBases.forEach(mb => {
         mediaFiles[mb] = folderMedia[mb];
         const csvBase = csvMapping[mb];
-        if (csvBase) csvFiles[mb] = folderCsv[csvBase];
+        if (csvBase) {
+          csvFiles[mb] = folderCsv[csvBase];
+          // File System Access APIのハンドルをキャッシュ
+          if (folderCsv[csvBase]?._handle) csvHandles[mb] = folderCsv[csvBase]._handle;
+        }
       });
 
-      // 既存ライブラリにあるか確認
-      const existingId = Object.keys(library).find(id => library[id].folderName === folderName);
+      const tracks = mediaBases.map(base => ({ base }));
 
+      if (parentFolderName) {
+        // サブフォルダ：親のworkIdを探して子として登録
+        const parentId = Object.keys(library).find(id => library[id].folderName === parentFolderName);
+        if (parentId) {
+          if (!library[parentId].children) library[parentId].children = {};
+          library[parentId].children[folderName] = tracks;
+          saveLibraryToStorage();
+          renderLibrarySidebar();
+        }
+        return;
+      }
+
+      // 最上位フォルダ
+      const existingId = Object.keys(library).find(id => library[id].folderName === folderName);
       if (existingId) {
-        // 既存：ファイルを更新
         if (currentTrack && folderMedia[currentTrack]) loadTrack(currentTrack);
         renderLibrarySidebar();
       } else if (mediaBases.length) {
-        // 新規：メタデータ入力
         const workId = 'work_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-        pendingFolders.push({ workId, folderName, folderMedia, folderCsv, csvMapping });
+        library[workId] = { id:workId, folderName, title:folderName, circle:'', cv:'', rj:'', addedAt:Date.now(), plays:0, fav:false, tracks, children:{} };
+        pendingFolders.push({ workId, folderName, folderMedia, folderCsv, csvMapping, tracks });
+        if (pendingFolders.length === 1) { currentMetaIndex = 0; showMetaModal(); }
+      } else if (!mediaBases.length && Object.keys(folderCsv).length === 0) {
+        // メディアなしでも最上位フォルダとして登録（サブフォルダのみの親）
+        const workId = 'work_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+        library[workId] = { id:workId, folderName, title:folderName, circle:'', cv:'', rj:'', addedAt:Date.now(), plays:0, fav:false, tracks:[], children:{} };
+        pendingFolders.push({ workId, folderName, folderMedia:{}, folderCsv:{}, csvMapping:{}, tracks:[] });
         if (pendingFolders.length === 1) { currentMetaIndex = 0; showMetaModal(); }
       }
     }
@@ -568,15 +646,12 @@
 
     function saveMeta() {
       const isEdit = !!editingWorkId;
-      const { workId, folderName, folderMedia } = isEdit
-        ? { workId: editingWorkId, folderName: library[editingWorkId].folderName, folderMedia: {} }
+      const { workId, folderName } = isEdit
+        ? { workId: editingWorkId, folderName: library[editingWorkId].folderName }
         : pendingFolders[currentMetaIndex];
 
-      const tracks = isEdit
-        ? library[editingWorkId].tracks
-        : Object.keys(folderMedia).sort().map(base => ({ base }));
-
       library[workId] = {
+        ...library[workId],
         id: workId, folderName,
         title:   document.getElementById('meta-work').value   || folderName,
         circle:  document.getElementById('meta-circle').value || '',
@@ -585,7 +660,8 @@
         addedAt: library[workId]?.addedAt || Date.now(),
         plays:   library[workId]?.plays   || 0,
         fav:     library[workId]?.fav     || false,
-        tracks,
+        tracks:  library[workId]?.tracks  || [],
+        children:library[workId]?.children || {},
       };
 
       saveLibraryToStorage();
@@ -605,12 +681,8 @@
     }
 
     function skipMeta() {
-      const { workId, folderName, folderMedia } = pendingFolders[currentMetaIndex];
-      library[workId] = {
-        id: workId, folderName, title: folderName, circle:'', cv:'', rj:'',
-        addedAt: Date.now(), plays:0, fav:false,
-        tracks: Object.keys(folderMedia).sort().map(base => ({ base })),
-      };
+      const { workId } = pendingFolders[currentMetaIndex];
+      library[workId].title = library[workId].folderName;
       saveLibraryToStorage();
       document.getElementById('meta-modal').classList.add('hidden');
       currentMetaIndex++;
@@ -632,8 +704,10 @@
     }
 
     // ══════════════════════════════
-    //  サイドバー描画
+    //  サイドバー描画（折りたたみ式）
     // ══════════════════════════════
+    const expandedWorks = new Set(); // 展開中のworkId
+
     function renderLibrarySidebar() {
       const list  = document.getElementById('libraryList');
       const query = document.getElementById('searchInput').value.toLowerCase();
@@ -646,6 +720,12 @@
         w.cv.toLowerCase().includes(query)     ||
         w.rj.toLowerCase().includes(query)
       );
+
+      // 読み込み済みのファイルがある作品のみ表示
+      works = works.filter(w => {
+        const allTracks = [...(w.tracks||[]), ...Object.values(w.children||{}).flat()];
+        return allTracks.some(t => mediaFiles[t.base]);
+      });
 
       works.sort((a,b) => {
         if (sort==='added')  return a.addedAt - b.addedAt;
@@ -663,19 +743,48 @@
       }
 
       works.forEach(w => {
+        const isExpanded  = expandedWorks.has(w.id);
+        const hasChildren = w.children && Object.keys(w.children).length > 0;
+        const hasTracks   = w.tracks && w.tracks.length > 0;
+        const hasContent  = hasChildren || hasTracks;
+
+        // 作品行
         const div = document.createElement('div');
         div.className = 'work-item' + (w.id === currentWorkId ? ' active' : '');
         div.innerHTML = `
           <div class="work-item-header">
+            <span style="font-size:10px;color:var(--text-dim);margin-right:4px;flex-shrink:0;">${hasContent?(isExpanded?'▾':'▸'):'　'}</span>
             <span class="work-title">${w.title}</span>
             <button class="fav-btn ${w.fav?'active':''}" data-id="${w.id}">★</button>
           </div>
           <div class="work-meta">${[w.circle,w.cv].filter(Boolean).join('／')||'情報なし'}</div>
           ${w.rj?`<div class="work-rj">${w.rj}</div>`:''}
           <div class="work-plays">再生 ${w.plays}回</div>`;
+
         div.addEventListener('click', (e) => {
           if (e.target.classList.contains('fav-btn')) return;
-          selectWork(w.id); closeSidebar();
+          selectWork(w.id);
+          closeSidebar();
+          if (hasContent) {
+            if (isExpanded) expandedWorks.delete(w.id);
+            else expandedWorks.add(w.id);
+            renderLibrarySidebar();
+          }
+        });
+
+        // 右クリックメニュー（作品行）
+        div.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          const items = [
+            { label: '情報を編集', action: () => { currentWorkId=w.id; openEditMeta(); } },
+          ];
+          if (supportsFileSystemAccess) {
+            items.push({ separator: true });
+            items.push({ label: 'フォルダをリネーム', action: () => renameWorkFolder(w.id) });
+            items.push({ label: 'フォルダを削除', action: () => deleteWorkFolder(w.id) });
+            items.push({ label: 'サブフォルダを作成', action: () => createSubFolder(w.id) });
+          }
+          showContextMenu(e.clientX, e.clientY, items);
         });
         div.querySelector('.fav-btn').addEventListener('click', (e) => {
           e.stopPropagation();
@@ -683,6 +792,92 @@
           saveLibraryToStorage(); renderLibrarySidebar();
         });
         list.appendChild(div);
+
+        // 展開時：直下のトラックとサブフォルダを表示
+        if (isExpanded) {
+          // 直下のトラック
+          if (hasTracks) {
+            renderSubTracks(list, w.id, w.tracks, 1);
+          }
+          // サブフォルダ
+          if (hasChildren) {
+            renderSubFolders(list, w.id, w.children, 1);
+          }
+        }
+      });
+    }
+
+    function renderSubTracks(list, workId, tracks, depth) {
+      tracks.forEach(t => {
+        const hasCSV = !!csvFiles[t.base];
+        const row = document.createElement('div');
+        row.style.cssText = `padding:6px 14px 6px ${14+depth*14}px; cursor:pointer; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-dim); display:flex; align-items:center; gap:6px; border-left:3px solid transparent; transition:all .15s;`;
+        row.innerHTML = `
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">▷ ${t.base}</span>
+          <span style="font-size:9px;padding:1px 5px;border-radius:3px;flex-shrink:0;${hasCSV?'background:rgba(79,255,176,.15);color:var(--success)':'background:rgba(255,183,77,.1);color:var(--warning)'}">${hasCSV?'CSV':'未割当'}</span>
+          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-file" data-base="${t.base}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-file" data-base="${t.base}" title="削除">✕</button>`:''}`;
+        row.addEventListener('mouseenter', ()=>{ row.style.background='var(--bg3)'; });
+        row.addEventListener('mouseleave', ()=>{ row.style.background=''; });
+        row.addEventListener('click', (e) => {
+          if (e.target.classList.contains('file-op-btn')) return;
+          currentWorkId = workId;
+          const allTracks = [...(library[workId].tracks||[])];
+          if (library[workId].children) Object.values(library[workId].children).forEach(st=>allTracks.push(...st));
+          trackList = allTracks.map(t=>t.base);
+          loadTrack(t.base);
+          closeSidebar();
+        });
+        // ファイル操作ボタン
+        if (supportsFileSystemAccess) {
+          row.querySelector('[data-action="rename-file"]')?.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await renameFile(t.base, workId);
+          });
+          row.querySelector('[data-action="delete-file"]')?.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await deleteFile(t.base, workId);
+          });
+        }
+        list.appendChild(row);
+      });
+    }
+
+    function renderSubFolders(list, parentWorkId, children, depth) {
+      if (!window._expandedSubs) window._expandedSubs = new Set();
+      const expandKey = parentWorkId + ':children';
+
+      Object.entries(children).forEach(([subName, subTracks]) => {
+        const key   = expandKey + ':' + subName;
+        const isExp = window._expandedSubs.has(key);
+
+        const row = document.createElement('div');
+        row.style.cssText = `padding:7px 14px 7px ${14+depth*14}px; cursor:pointer; font-size:11px; font-family:'Syne',sans-serif; color:var(--text-dim); display:flex; align-items:center; gap:6px; transition:all .15s;`;
+        row.innerHTML = `
+          <span style="font-size:10px;">${isExp?'▾':'▸'}</span>
+          <span style="font-weight:600;flex:1;">${subName}</span>
+          <span style="font-size:9px;font-family:'JetBrains Mono',monospace;">${subTracks.length}曲</span>
+          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-dir" data-name="${subName}" data-parent="${parentWorkId}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-dir" data-name="${subName}" data-parent="${parentWorkId}" title="削除">✕</button>`:''}`;
+        row.addEventListener('mouseenter', ()=>{ row.style.background='var(--bg3)'; });
+        row.addEventListener('mouseleave', ()=>{ row.style.background=''; });
+        row.addEventListener('click', (e) => {
+          if (e.target.classList.contains('file-op-btn')) return;
+          if (isExp) window._expandedSubs.delete(key);
+          else window._expandedSubs.add(key);
+          renderLibrarySidebar();
+        });
+        if (supportsFileSystemAccess) {
+          row.querySelector('[data-action="rename-dir"]')?.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await renameDirInWork(parentWorkId, subName);
+          });
+          row.querySelector('[data-action="delete-dir"]')?.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await deleteDirInWork(parentWorkId, subName);
+          });
+        }
+        list.appendChild(row);
+
+        if (isExp) renderSubTracks(list, parentWorkId, subTracks, depth+1);
       });
     }
 
@@ -694,7 +889,7 @@
     function selectWork(workId) {
       currentWorkId = workId;
       const w = library[workId];
-      w.plays++; saveLibraryToStorage(); renderLibrarySidebar();
+      w.plays++; saveLibraryToStorage();
 
       document.getElementById('work-title-display').textContent  = w.title;
       document.getElementById('work-rj-display').textContent     = w.rj;
@@ -704,14 +899,26 @@
 
       const tracksEl = document.getElementById('tracksEl');
       tracksEl.innerHTML = '';
-      trackList = w.tracks.map(t => t.base);
 
-      w.tracks.forEach((t,i) => {
+      const allTracks = [...(w.tracks||[])];
+      if (w.children) Object.values(w.children).forEach(st => allTracks.push(...st));
+      // 読み込み済みファイルのみ表示
+      const loadedTracks = allTracks.filter(t => mediaFiles[t.base]);
+      trackList = loadedTracks.map(t => t.base);
+
+      loadedTracks.forEach((t,i) => {
         const hasCSV = !!csvFiles[t.base];
         const div = document.createElement('div');
         div.className = 'track' + (i===0?' active':'');
         div.innerHTML = `<span>${String(i+1).padStart(2,'0')}. ${t.base}</span><span class="csv-badge ${hasCSV?'':'missing'}">${hasCSV?'CSV':'未割当'}</span>`;
         div.addEventListener('click', () => loadTrack(t.base));
+        // 右クリックメニュー
+        div.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          showContextMenu(e.clientX, e.clientY, [
+            { label: 'CSVを編集', action: () => { currentTrack=t.base; openCsvSelect(); } },
+          ]);
+        });
         tracksEl.appendChild(div);
       });
 
@@ -734,12 +941,92 @@
       document.querySelectorAll('.track').forEach(t => {
         t.classList.toggle('active', t.querySelector('span').textContent.includes(base));
       });
-      player.src = URL.createObjectURL(file);
-      player.load();
-      document.querySelector('.no-media').style.display = 'none';
-      player.style.display = 'block';
+
+      const isAudio = file.type.startsWith('audio/');
+
+      if (isAudio) {
+        // 音声ファイル：playerを非表示にしてサムネイル表示
+        player.src = URL.createObjectURL(file);
+        player.load();
+        player.style.display = 'none';
+        document.querySelector('.no-media').style.display = 'none';
+        // サムネイル画像を探す
+        showAudioThumbnail(base);
+      } else {
+        // 動画ファイル
+        player.src = URL.createObjectURL(file);
+        player.load();
+        player.style.display = 'block';
+        document.querySelector('.no-media').style.display = 'none';
+        hideThumbnail();
+      }
+
       if (csvFiles[base]) loadCSV(csvFiles[base]);
       else { schedule=[]; renderTimeline(); }
+    }
+
+    // サムネイル要素
+    let thumbnailEl = null;
+    function showAudioThumbnail(base) {
+      hideThumbnail();
+      // 同名の画像ファイルを探す（jpg/png/webp）
+      const imgExts = ['jpg','jpeg','png','webp','gif'];
+      let imgFile = null;
+      for (const ext of imgExts) {
+        if (mediaFiles[base + '_thumb'] || mediaFiles[base]) {
+          // 同じフォルダの画像を探す
+          const w = library[currentWorkId];
+          if (w) {
+            const folderHandle = dirHandles[w.folderName];
+            if (folderHandle) {
+              // 非同期で画像を検索
+              searchThumbnailInFolder(folderHandle, base);
+              return;
+            }
+          }
+        }
+        break;
+      }
+    }
+
+    async function searchThumbnailInFolder(folderHandle, base) {
+      const imgExts = ['jpg','jpeg','png','webp','gif'];
+      try {
+        for await (const entry of folderHandle.values()) {
+          if (entry.kind === 'file') {
+            const ext = entry.name.split('.').pop().toLowerCase();
+            if (imgExts.includes(ext)) {
+              const imgFile = await entry.getFile();
+              displayThumbnail(imgFile);
+              return;
+            }
+          }
+        }
+      } catch(e) {}
+      // 画像が見つからない場合はデフォルト表示
+      showDefaultAudioView();
+    }
+
+    function displayThumbnail(imgFile) {
+      hideThumbnail();
+      const videoWrap = document.getElementById('video-wrap');
+      thumbnailEl = document.createElement('img');
+      thumbnailEl.src = URL.createObjectURL(imgFile);
+      thumbnailEl.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
+      videoWrap.appendChild(thumbnailEl);
+    }
+
+    function showDefaultAudioView() {
+      hideThumbnail();
+      const videoWrap = document.getElementById('video-wrap');
+      thumbnailEl = document.createElement('div');
+      thumbnailEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--text-dim);';
+      thumbnailEl.innerHTML = '<div style="font-size:64px;opacity:.4;">♪</div><div style="font-size:12px;font-family:\'JetBrains Mono\',monospace;">' + (currentTrack||'') + '</div>';
+      videoWrap.appendChild(thumbnailEl);
+    }
+
+    function hideThumbnail() {
+      if (thumbnailEl) { thumbnailEl.remove(); thumbnailEl = null; }
     }
 
     player.addEventListener('timeupdate', () => {
@@ -936,6 +1223,232 @@
     })();
 
     // ══════════════════════════════
+    //  右クリックメニュー
+    // ══════════════════════════════
+    const ctxMenu = document.getElementById('ctx-menu');
+    document.addEventListener('click', () => ctxMenu.classList.remove('show'));
+    document.addEventListener('contextmenu', () => ctxMenu.classList.remove('show'));
+
+    function showContextMenu(x, y, items) {
+      ctxMenu.innerHTML = '';
+      items.forEach(item => {
+        if (item.separator) {
+          const sep = document.createElement('div');
+          sep.className = 'ctx-separator';
+          ctxMenu.appendChild(sep);
+          return;
+        }
+        const el = document.createElement('div');
+        el.className = 'ctx-item';
+        el.textContent = item.label;
+        el.addEventListener('click', (e) => { e.stopPropagation(); ctxMenu.classList.remove('show'); item.action(); });
+        ctxMenu.appendChild(el);
+      });
+
+      // 画面外に出ないよう位置調整
+      ctxMenu.style.left = x + 'px';
+      ctxMenu.style.top  = y + 'px';
+      ctxMenu.classList.add('show');
+      const rect = ctxMenu.getBoundingClientRect();
+      if (rect.right  > window.innerWidth)  ctxMenu.style.left = (x - rect.width)  + 'px';
+      if (rect.bottom > window.innerHeight) ctxMenu.style.top  = (y - rect.height) + 'px';
+    }
+
+    // 作品フォルダのリネーム
+    async function renameWorkFolder(workId) {
+      const w = library[workId];
+      const newName = prompt('新しいフォルダ名', w.folderName);
+      if (!newName || newName === w.folderName) return;
+      if (!rootDirHandle) { alert('フォルダが見つかりません。再読み込みしてください。'); return; }
+      try {
+        const oldHandle = dirHandles[w.folderName];
+        const newDirHandle = await rootDirHandle.getDirectoryHandle(newName, { create: true });
+        // ファイルをコピー
+        if (oldHandle) {
+          await copyDirContents(oldHandle, newDirHandle);
+          await rootDirHandle.removeEntry(w.folderName, { recursive: true });
+        }
+        dirHandles[newName] = newDirHandle;
+        delete dirHandles[w.folderName];
+        w.folderName = newName;
+        w.title = w.title === w.folderName ? newName : w.title;
+        saveLibraryToStorage(); renderLibrarySidebar();
+      } catch(e) { alert('リネームに失敗しました: ' + e.message); }
+    }
+
+    async function deleteWorkFolder(workId) {
+      const w = library[workId];
+      if (!confirm(`"${w.title}" を削除しますか？`)) return;
+      if (!rootDirHandle) { alert('フォルダが見つかりません。'); return; }
+      try {
+        await rootDirHandle.removeEntry(w.folderName, { recursive: true }).catch(()=>{});
+        delete library[workId];
+        delete dirHandles[w.folderName];
+        saveLibraryToStorage(); renderLibrarySidebar();
+      } catch(e) { alert('削除に失敗しました: ' + e.message); }
+    }
+
+    async function createSubFolder(workId) {
+      const w = library[workId];
+      const name = prompt('新しいサブフォルダ名');
+      if (!name) return;
+      try {
+        const parentHandle = dirHandles[w.folderName] || await rootDirHandle?.getDirectoryHandle(w.folderName);
+        if (!parentHandle) { alert('フォルダが見つかりません。'); return; }
+        const newHandle = await parentHandle.getDirectoryHandle(name, { create: true });
+        dirHandles[name] = newHandle;
+        if (!w.children) w.children = {};
+        w.children[name] = [];
+        saveLibraryToStorage(); renderLibrarySidebar();
+      } catch(e) { alert('作成に失敗しました: ' + e.message); }
+    }
+
+    async function copyDirContents(srcHandle, dstHandle) {
+      for await (const entry of srcHandle.values()) {
+        if (entry.kind === 'file') {
+          const file = await entry.getFile();
+          const newHandle = await dstHandle.getFileHandle(entry.name, { create: true });
+          const writable  = await newHandle.createWritable();
+          await writable.write(await file.arrayBuffer());
+          await writable.close();
+        } else if (entry.kind === 'directory') {
+          const subDst = await dstHandle.getDirectoryHandle(entry.name, { create: true });
+          await copyDirContents(entry, subDst);
+        }
+      }
+    }
+    async function renameFile(base, workId) {
+      const newName = prompt('新しいファイル名（拡張子なし）', base);
+      if (!newName || newName === base) return;
+
+      const mFile = mediaFiles[base];
+      const ext   = mFile?.name.split('.').pop() || '';
+
+      try {
+        // 親フォルダのハンドルを取得
+        const w          = library[workId];
+        const parentName = w.folderName;
+        const parentHandle = dirHandles[parentName];
+        if (!parentHandle) { alert('フォルダが見つかりません。再読み込みしてください。'); return; }
+
+        // 新ファイルを作成してコピー
+        const newFileHandle = await parentHandle.getFileHandle(newName + '.' + ext, { create: true });
+        const writable = await newFileHandle.createWritable();
+        const buf = await mFile.arrayBuffer();
+        await writable.write(buf);
+        await writable.close();
+
+        // 旧ファイルを削除
+        await parentHandle.removeEntry(mFile.name);
+
+        // メモリ上を更新
+        const newFile = await newFileHandle.getFile();
+        newFile._handle = newFileHandle;
+        mediaFiles[newName] = newFile;
+        delete mediaFiles[base];
+        if (csvFiles[base])  { csvFiles[newName]  = csvFiles[base];  delete csvFiles[base]; }
+        if (csvHandles[base]){ csvHandles[newName] = csvHandles[base]; delete csvHandles[base]; }
+
+        // ライブラリ更新
+        updateTrackBase(workId, base, newName);
+        saveLibraryToStorage();
+        renderLibrarySidebar();
+      } catch(e) { alert('リネームに失敗しました: ' + e.message); }
+    }
+
+    async function deleteFile(base, workId) {
+      if (!confirm(`"${base}" を削除しますか？`)) return;
+      try {
+        const mFile      = mediaFiles[base];
+        const w          = library[workId];
+        const parentHandle = dirHandles[w.folderName];
+        if (!parentHandle) { alert('フォルダが見つかりません。'); return; }
+
+        await parentHandle.removeEntry(mFile.name);
+        if (csvFiles[base]) {
+          await parentHandle.removeEntry(csvFiles[base].name).catch(()=>{});
+        }
+
+        delete mediaFiles[base]; delete csvFiles[base]; delete csvHandles[base];
+        removeTrackFromWork(workId, base);
+        saveLibraryToStorage();
+        renderLibrarySidebar();
+      } catch(e) { alert('削除に失敗しました: ' + e.message); }
+    }
+
+    async function renameDirInWork(workId, subName) {
+      const newName = prompt('新しいフォルダ名', subName);
+      if (!newName || newName === subName) return;
+      // フォルダリネームはFile System Access APIでは直接できないため
+      // 新フォルダを作成→ファイルをコピー→旧フォルダを削除
+      try {
+        const w = library[workId];
+        const parentHandle = dirHandles[w.folderName];
+        if (!parentHandle) { alert('フォルダが見つかりません。'); return; }
+
+        const oldHandle = dirHandles[subName];
+        const newDirHandle = await parentHandle.getDirectoryHandle(newName, { create: true });
+
+        // ファイルをコピー
+        if (oldHandle) {
+          for await (const entry of oldHandle.values()) {
+            if (entry.kind === 'file') {
+              const file = await entry.getFile();
+              const newHandle = await newDirHandle.getFileHandle(entry.name, { create: true });
+              const writable  = await newHandle.createWritable();
+              await writable.write(await file.arrayBuffer());
+              await writable.close();
+            }
+          }
+          await parentHandle.removeEntry(subName, { recursive: true });
+        }
+
+        // ライブラリ更新
+        dirHandles[newName] = newDirHandle;
+        delete dirHandles[subName];
+        if (w.children[subName]) {
+          w.children[newName] = w.children[subName];
+          delete w.children[subName];
+        }
+        saveLibraryToStorage();
+        renderLibrarySidebar();
+      } catch(e) { alert('リネームに失敗しました: ' + e.message); }
+    }
+
+    async function deleteDirInWork(workId, subName) {
+      if (!confirm(`"${subName}" フォルダを削除しますか？`)) return;
+      try {
+        const w = library[workId];
+        const parentHandle = dirHandles[w.folderName];
+        if (parentHandle) await parentHandle.removeEntry(subName, { recursive: true }).catch(()=>{});
+
+        // メモリ上のトラックを削除
+        if (w.children[subName]) {
+          w.children[subName].forEach(t => {
+            delete mediaFiles[t.base]; delete csvFiles[t.base]; delete csvHandles[t.base];
+          });
+          delete w.children[subName];
+        }
+        delete dirHandles[subName];
+        saveLibraryToStorage();
+        renderLibrarySidebar();
+      } catch(e) { alert('削除に失敗しました: ' + e.message); }
+    }
+
+    function updateTrackBase(workId, oldBase, newBase) {
+      const w = library[workId];
+      const update = tracks => tracks.map(t => t.base === oldBase ? { base: newBase } : t);
+      if (w.tracks) w.tracks = update(w.tracks);
+      if (w.children) Object.keys(w.children).forEach(k => { w.children[k] = update(w.children[k]); });
+    }
+
+    function removeTrackFromWork(workId, base) {
+      const w = library[workId];
+      if (w.tracks) w.tracks = w.tracks.filter(t => t.base !== base);
+      if (w.children) Object.keys(w.children).forEach(k => { w.children[k] = w.children[k].filter(t => t.base !== base); });
+    }
+
+    // ══════════════════════════════
     //  CSV編集遷移
     // ══════════════════════════════
     function openCsvSelect() {
@@ -953,17 +1466,16 @@
       sessionStorage.setItem('editor-track',   currentTrack);
       sessionStorage.setItem('editor-mode',     mode);
       sessionStorage.setItem('editor-work-id',  currentWorkId);
+      // File System Access API対応フラグ
+      sessionStorage.setItem('editor-fsa', supportsFileSystemAccess ? '1' : '0');
 
-      // メディアファイル名だけ渡す（base64は使わない）
       const mFile = mediaFiles[currentTrack];
       if (mFile) {
         sessionStorage.setItem('editor-media-name', mFile.name);
         sessionStorage.setItem('editor-media-type', mFile.type);
-        // FileをObjectURLで渡すのではなくIndexedDBに保存
         await saveFileToIDB('editor-media', mFile);
       }
 
-      // CSVテキストを渡す
       const cFile = csvFiles[currentTrack];
       if (cFile && (mode==='existing'||mode==='copy')) {
         const text = await cFile.text();
@@ -972,6 +1484,15 @@
       } else {
         sessionStorage.removeItem('editor-csv-text');
         sessionStorage.removeItem('editor-csv-name');
+      }
+
+      // CSVファイルハンドルをIDBに保存（直接上書き保存用）
+      if (supportsFileSystemAccess && mode === 'existing' && csvHandles[currentTrack]) {
+        await saveFileToIDB('editor-csv-handle', csvHandles[currentTrack]);
+        sessionStorage.setItem('editor-has-handle', '1');
+      } else {
+        sessionStorage.removeItem('editor-has-handle');
+        await saveFileToIDB('editor-csv-handle', null).catch(()=>{});
       }
 
       window.location.href = 'editor.html';
