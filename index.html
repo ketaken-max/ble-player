@@ -614,6 +614,9 @@
       // 最上位フォルダ
       const existingId = Object.keys(library).find(id => library[id].folderName === folderName);
       if (existingId) {
+        // 既存フォルダの場合はトラック情報を更新
+        library[existingId].tracks = tracks;
+        saveLibraryToStorage();
         if (currentTrack && folderMedia[currentTrack]) loadTrack(currentTrack);
         renderLibrarySidebar();
       } else if (mediaBases.length) {
@@ -631,7 +634,12 @@
     }
 
     function showMetaModal() {
-      if (currentMetaIndex >= pendingFolders.length) { pendingFolders = []; renderLibrarySidebar(); return; }
+      if (currentMetaIndex >= pendingFolders.length) { 
+        pendingFolders = []; 
+        currentMetaIndex = 0;
+        renderLibrarySidebar(); 
+        return; 
+      }
       const { folderName } = pendingFolders[currentMetaIndex];
       document.getElementById('modal-title').textContent    = '作品情報を入力';
       document.getElementById('modal-folder').textContent   = 'フォルダ: ' + folderName;
@@ -728,6 +736,13 @@
       });
 
       works.sort((a,b) => {
+        if (sort==='added')  return a.addedAt - b.addedAt;
+        if (sort==='title')  return a.title.localeCompare(b.title,'ja');
+        if (sort==='circle') return a.circle.localeCompare(b.circle,'ja');
+        if (sort==='plays')  return b.plays - a.plays;
+        if (sort==='fav')    return (b.fav?1:0)-(a.fav?1:0);
+        return 0;
+      });
 
       list.innerHTML = '';
       if (!works.length) {
