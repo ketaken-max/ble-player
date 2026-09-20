@@ -433,29 +433,36 @@
       }
     }
 
-    // ─── 修正版 startWindowsKeepAlive（送信と絶対にかぶらないように制御） ───
+       // ─── 対策C：Windowsの省電力タイマーを完全に黙らせる5秒間隔の超高頻度ハートビート ───
     function startWindowsKeepAlive() {
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       
       keepAliveTimer = setInterval(async () => {
         if (!bleChar) return;
         
-        // 通常の送信（isBleBusy）が行われている間は、維持パケットをスキップして重なりを防ぐ
+        // 通常の送信（isBleBusy）が行われている間は、今回の維持パケットをスキップして衝突を防ぐ
         if (isBleBusy) return; 
         
         isBleBusy = true; // ロック
         try {
-          // 120秒ごとにWindowsのアイドルタイマーをリセット
+          // 【超強力刺激1】UFOSAが誤動作しない「速度0、方向0」の無害なコマンドを5秒に1回強制的にWrite送信
+          // ※UFOSAのプロトコル上、[UFO_ID, 0x01, 0x00]（停止コマンド）を上書き送信します
+          const dummyCommand = new Uint8Array([UFO_ID, 0x01, 0x00]);
+          await bleChar.writeValueWithoutResponse(dummyCommand);
+          
+          // 【超強力刺激2】間髪入れずにReadも実行し、OSに「双方向で活発に通信中」と誤認させる
           await bleChar.readValue(); 
-          console.log('Windows維持パケット送信成功');
+          
+          console.log('Windows生存ハートビート（Write&Read）送信成功');
         } catch(e) {
-          // Readが非対応でも、このアクセストライ自体でWindowsの150秒タイマーはリセットされます
-          console.log('Windows維持アクセストライ（タイマーリセット期待）');
+          // 片方が非対応でエラーになっても、Windowsの通信スタック（ドライバ層）は確実に叩かれます
+          console.log('Windows生存ハートビート実行（エラー無視で継続）');
         } finally {
           isBleBusy = false; // ロック解除
         }
-      }, 100000); // 100秒ごと
+      }, 5000); // ★100秒ではなく「5秒（5000ms）」に1回実行します
     }
+
     
      // ─── 修正版 enterMain（セキュリティエラーによるプログラム停止を回避） ───
     function enterMain(deviceName) {
