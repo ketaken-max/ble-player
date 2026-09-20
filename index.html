@@ -413,6 +413,16 @@
     const service = await bleServer.getPrimaryService(UFO_SERVICE);
     
     bleChar = await service.getCharacteristic(UFO_CHAR);
+    try {
+      await bleChar.startNotifications();
+      bleChar.addEventListener('characteristicvaluechanged', (event) => {
+        // Windowsの150秒強制切断を防ぐためのダミー待ち受け（空処理でOK）
+      });
+      console.log('Windows対策: Notificationの購読を開始しました');
+    } catch(nE) {
+      console.warn('Notifyに非対応、または別のキャラクタリスティックでの対応が必要です:', nE);
+    }
+    
     bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
     enterMain(bleDevice.name || 'UFO SA');
   } catch(e) {
