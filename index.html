@@ -377,7 +377,9 @@
     const UFO_SERVICE = '40ee1111-63ec-4b7f-8ce7-712efd55b90e';
     const UFO_CHAR    = '40ee2222-63ec-4b7f-8ce7-712efd55b90e';
     const UFO_ID      = 0x02;
-    let bleDevice = null,bleServer = null, bleChar = null, speedRateValue = 0.5;let isWriting = false;
+    let bleDevice = null,bleServer = null, bleChar = null, speedRateValue = 0.5,
+    let isWriting = false;
+    let keepAliveTimer = null;
 
         async function sendCommand(direction, strength) {
       if (!bleChar || isWriting) return; // ★ 前の送信が終わっていなければ処理をスキップ
@@ -403,38 +405,41 @@
   const scr = document.getElementById('connect-screen');
   btn.disabled = true; btn.textContent = '接続中…'; err.textContent = '';
   scr.classList.add('connecting');
-  try {
-    bleDevice = await navigator.bluetooth.requestDevice({ filters:[{name:'UFOSA'}], optionalServices:[UFO_SERVICE] });
-    
-    // 2. const server ではなく、グローバル変数に代入する
-    bleServer = await bleDevice.gatt.connect(); 
-    
-    // 3. getPrimaryService にもグローバル変数を渡す
-    const service = await bleServer.getPrimaryService(UFO_SERVICE);
-    
-    bleChar = await service.getCharacteristic(UFO_CHAR);
-    try {
-      await bleChar.startNotifications();
-      bleChar.addEventListener('characteristicvaluechanged', (event) => {
-        // Windowsの150秒強制切断を防ぐためのダミー待ち受け（空処理でOK）
-      });
-      console.log('Windows対策: Notificationの購読を開始しました');
-    } catch(nE) {
-      console.warn('Notifyに非対応、または別のキャラクタリスティックでの対応が必要です:', nE);
+  try {async function startConnect() {
+      // ...接続処理...
+      bleChar = await service.getCharacteristic(UFO_CHAR);
+      
+      // ★ Windows対策：120秒ごとにタイマーをリセットする生存確認ループを起動
+      startWindowsKeepAlive();
+
+      bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+      enterMain(bleDevice.name || 'UFO SA');
     }
-    
-    bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
-    enterMain(bleDevice.name || 'UFO SA');
-  } catch(e) {
-    scr.classList.remove('connecting');
-    btn.disabled = false; btn.textContent = 'UFO SA に接続する';
-    if (e.name !== 'NotFoundError') err.textContent = 'エラー: ' + e.message;
-  }
-}
 
+    function startWindowsKeepAlive() {
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
+      
+      keepAliveTimer = setInterval(async () => {
+        if (!bleChar) return;
+        try {
+          // デバイスから1バイトでもデータをダミーで読み込むことで
+          // Windowsに「まだこの通信は生きている」と強制認識させ、150秒タイマーをリセットします。
+          // ※もし readValue() がUFOSA側でエラーになる場合は、エラーをcatchで逃がすだけでも
+          // Windowsのスタックが動くため効果がある場合があります。
+          await bleChar.readValue(); 
+          console.log('Windows維持パケット送信成功');
+        } catch(e) {
+          // read属性がない場合はエラーになりますが、アクセスを試みたという事実だけで
+          // タイマーがリセットされることがあります
+          console.log('Windows維持アクセストライ（Read無効でもタイマーリセット効果期待）');
+        }
+      }, 120000); // 120秒（2分）ごと
+    }
 
-    function skipConnect() { enterMain(null); }
-
+    function onDisconnected() {
+      if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; } // タイマー停止
+      // ...既存の切断処理...
+    }
     function enterMain(deviceName) {
       document.getElementById('connect-screen').classList.add('hidden');
       if (deviceName) {
