@@ -379,14 +379,31 @@
     const UFO_ID      = 0x02;
     let bleDevice = null, bleServer = null, bleChar = null, speedRateValue = 0.5;
     let keepAliveTimer = null; // ★ 対策B用のタイマー変数をここに追加
+    let isBleBusy = false; 
 
-    // 既存の sendCommand はそのまま
+    // ─── 修正版 sendCommand（非同期の重複を絶対に許さない構造） ───
     async function sendCommand(direction, strength) {
       if (!bleChar) return;
+      
+      // もし前回の通信（送信、または維持用の読込）がまだ終わっていれば、今回のコマンドは即座に破棄して詰まりを防ぐ
+      if (isBleBusy) {
+        // ログが溢れるのを防ぐため、console.warnは出さずにリターンします
+        return; 
+      }
+      
+      isBleBusy = true; // 通信開始（ロック）
       const spd   = Math.min(100, Math.floor(strength * speedRateValue));
       const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
-      try { await bleChar.writeValueWithoutResponse(new Uint8Array([UFO_ID, 0x01, byte2])); }
-      catch(e) { console.warn('BLE送信エラー:', e); }
+      
+      try { 
+        // 応答なし送信（WithoutResponse）でパケットを最速処理
+        await bleChar.writeValueWithoutResponse(new Uint8Array([UFO_ID, 0x01, byte2])); 
+      }
+      catch(e) { 
+        console.warn('BLE送信エラー:', e); 
+      } finally {
+        isBleBusy = false; // 成功・失敗に関わらず必ずロックを解除
+      }
     }
 
     // ─── 修正版 startConnect ───
@@ -416,23 +433,32 @@
       }
     }
 
-    // ─── 対策Bの本体関数（独立させて配置します） ───
+    // ─── 修正版 startWindowsKeepAlive（送信と絶対にかぶらないように制御） ───
     function startWindowsKeepAlive() {
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       
       keepAliveTimer = setInterval(async () => {
         if (!bleChar) return;
+        
+        // 通常の送信（isBleBusy）が行われている間は、維持パケットをスキップして重なりを防ぐ
+        if (isBleBusy) return; 
+        
+        isBleBusy = true; // ロック
         try {
-          // UFOSAがReadに対応していればデータ取得、未対応でもWindowsのスタックが動いてタイマーがリセットされます
+          // 120秒ごとにWindowsのアイドルタイマーをリセット
           await bleChar.readValue(); 
           console.log('Windows維持パケット送信成功');
         } catch(e) {
-          // エラーが出ても無視してWindowsスタックだけを刺激するセーフガード
-          console.log('Windows維持アクセストライ（Read無効でもタイマーリセット効果期待）');
+          // Readが非対応でも、このアクセストライ自体でWindowsの150秒タイマーはリセットされます
+          console.log('Windows維持アクセストライ（タイマーリセット期待）');
+        } finally {
+          isBleBusy = false; // ロック解除
         }
-      }, 100000); // 150秒よりも余裕を持って「100秒（1分40秒）」ごとに実行します
+      }, 100000); // 100秒ごと
     }
-     function enterMain(deviceName) {
+    
+     // ─── 修正版 enterMain（セキュリティエラーによるプログラム停止を回避） ───
+    function enterMain(deviceName) {
       document.getElementById('connect-screen').classList.add('hidden');
       if (deviceName) {
         document.getElementById('bleLabel').textContent = deviceName + ' 接続済';
@@ -440,8 +466,15 @@
       } else {
         document.getElementById('bleLabel').textContent = '未接続（テスト）';
       }
-      if (!isTouchDevice()) {
-        document.getElementById('addFolderBtn').click();
+      
+      // try-catchで囲むことで、フォルダ選択ダイアログがセキュリティ制限で弾かれても
+      // プログラム全体がクラッシュしてBLE通信に悪影響を及ぼすのを防ぎます
+      try {
+        if (!isTouchDevice()) {
+          document.getElementById('addFolderBtn').click();
+        }
+      } catch (folderError) {
+        console.warn('自動フォルダ選択はブラウザにブロックされました（手動で選択してください）:', folderError);
       }
     }
 
