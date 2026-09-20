@@ -377,15 +377,25 @@
     const UFO_SERVICE = '40ee1111-63ec-4b7f-8ce7-712efd55b90e';
     const UFO_CHAR    = '40ee2222-63ec-4b7f-8ce7-712efd55b90e';
     const UFO_ID      = 0x02;
-    let bleDevice = null,bleServer = null, bleChar = null, speedRateValue = 0.5;
+    let bleDevice = null,bleServer = null, bleChar = null, speedRateValue = 0.5;let isWriting = false;
 
-    async function sendCommand(direction, strength) {
-      if (!bleChar) return;
+        async function sendCommand(direction, strength) {
+      if (!bleChar || isWriting) return; // ★ 前の送信が終わっていなければ処理をスキップ
+      
+      isWriting = true; // ★ 送信開始
       const spd   = Math.min(100, Math.floor(strength * speedRateValue));
       const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
-      try { await bleChar.writeValue(new Uint8Array([UFO_ID, 0x01, byte2])); }
-      catch(e) { console.warn('BLE送信エラー:', e); }
+      
+      try { 
+        await bleChar.writeValueWithoutResponse(new Uint8Array([UFO_ID, 0x01, byte2])); 
+      }
+      catch(e) { 
+        console.warn('BLE送信エラー:', e); 
+      } finally {
+        isWriting = false; // ★ 成功・失敗に関わらず必ずフラグを戻す
+      }
     }
+
 
     async function startConnect() {
   const btn = document.getElementById('connectBtn');
