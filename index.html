@@ -380,6 +380,8 @@
     let bleDevice = null, bleServer = null, bleChar = null, speedRateValue = 0.5;
     let keepAliveTimer = null; // ★ 対策B用のタイマー変数をここに追加
     let isBleBusy = false; 
+    let isAutoReconnecting = false;
+    
 
     // ─── 修正版 sendCommand（非同期の重複を絶対に許さない構造） ───
     async function sendCommand(direction, strength) {
@@ -485,20 +487,40 @@
       }
     }
 
-    // ─── 2つあった関数をこれ1つに統合します ───
-    function onDisconnected() {
-      // 1. 対策Bの維持用タイマーを安全に停止
-      if (keepAliveTimer) { 
-        clearInterval(keepAliveTimer); 
-        keepAliveTimer = null; 
-      }
-      
-      // 2. BLEの変数リセットとUI（画面）の更新
+    // ─── 修正版 onDisconnected（切断されたら0.1秒で自動復帰する） ───
+    async function onDisconnected() {
+      if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
       bleChar = null;
+      
+      // もし意図しない切断（150秒の壁）であれば、ダイアログを出さずに自動再接続を試みる
+      if (bleDevice && !isAutoReconnecting) {
+        isAutoReconnecting = true;
+        document.getElementById('bleLabel').textContent = '自動再接続中…';
+        console.log('Windows対策: 150秒の切断を検知。自動高速再接続を開始します。');
+        
+        try {
+          // ユーザーのポップアップなしで、前回のデバイスインスタンスからGATTを再接続
+          bleServer = await bleDevice.gatt.connect(); 
+          const service = await bleServer.getPrimaryService(UFO_SERVICE);
+          bleChar = await service.getCharacteristic(UFO_CHAR);
+          
+          // 再度タイマーを起動
+          startWindowsKeepAlive();
+          
+          document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 復帰済';
+          console.log('Windows対策: 自動高速再接続に成功しました！');
+          isAutoReconnecting = false;
+          return; // 通常の切断処理（confirm）へ行かずに終了
+        } catch(reconnectError) {
+          console.error('自動再接続に失敗しました。通常の手動再接続へ移行します:', reconnectError);
+          isAutoReconnecting = false;
+        }
+      }
+
+      // 自動再接続も失敗した場合のみ、従来の確認ダイアログを出す
       document.getElementById('bleDot').classList.add('disconnected');
       document.getElementById('bleLabel').textContent = '切断されました';
       
-      // 3. 再接続の確認ダイアログ
       if (confirm('UFO SA との接続が切れました。再接続しますか？')) {
         const scr = document.getElementById('connect-screen');
         scr.classList.remove('hidden','connecting');
