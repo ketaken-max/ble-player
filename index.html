@@ -377,7 +377,7 @@
     const UFO_SERVICE = '40ee1111-63ec-4b7f-8ce7-712efd55b90e';
     const UFO_CHAR    = '40ee2222-63ec-4b7f-8ce7-712efd55b90e';
     const UFO_ID      = 0x02;
-    let bleDevice = null, bleChar = null, speedRateValue = 0.5;
+    let bleDevice = null,bleServer = null, bleChar = null, speedRateValue = 0.5;
 
     async function sendCommand(direction, strength) {
       if (!bleChar) return;
@@ -388,24 +388,30 @@
     }
 
     async function startConnect() {
-      const btn = document.getElementById('connectBtn');
-      const err = document.getElementById('connectError');
-      const scr = document.getElementById('connect-screen');
-      btn.disabled = true; btn.textContent = '接続中…'; err.textContent = '';
-      scr.classList.add('connecting');
-      try {
-        bleDevice = await navigator.bluetooth.requestDevice({ filters:[{name:'UFOSA'}], optionalServices:[UFO_SERVICE] });
-        const server  = await bleDevice.gatt.connect();
-        const service = await server.getPrimaryService(UFO_SERVICE);
-        bleChar = await service.getCharacteristic(UFO_CHAR);
-        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
-        enterMain(bleDevice.name || 'UFO SA');
-      } catch(e) {
-        scr.classList.remove('connecting');
-        btn.disabled = false; btn.textContent = 'UFO SA に接続する';
-        if (e.name !== 'NotFoundError') err.textContent = 'エラー: ' + e.message;
-      }
-    }
+  const btn = document.getElementById('connectBtn');
+  const err = document.getElementById('connectError');
+  const scr = document.getElementById('connect-screen');
+  btn.disabled = true; btn.textContent = '接続中…'; err.textContent = '';
+  scr.classList.add('connecting');
+  try {
+    bleDevice = await navigator.bluetooth.requestDevice({ filters:[{name:'UFOSA'}], optionalServices:[UFO_SERVICE] });
+    
+    // 2. const server ではなく、グローバル変数に代入する
+    bleServer = await bleDevice.gatt.connect(); 
+    
+    // 3. getPrimaryService にもグローバル変数を渡す
+    const service = await bleServer.getPrimaryService(UFO_SERVICE);
+    
+    bleChar = await service.getCharacteristic(UFO_CHAR);
+    bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+    enterMain(bleDevice.name || 'UFO SA');
+  } catch(e) {
+    scr.classList.remove('connecting');
+    btn.disabled = false; btn.textContent = 'UFO SA に接続する';
+    if (e.name !== 'NotFoundError') err.textContent = 'エラー: ' + e.message;
+  }
+}
+
 
     function skipConnect() { enterMain(null); }
 
