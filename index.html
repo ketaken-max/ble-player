@@ -569,6 +569,18 @@
     // タッチデバイス判定（Android ChromeはsupportsFileSystemAccessがtrueになるため別途判定）
     const isTouchDevice = () => navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 
+    // ファイル名は自然順（track2 < track10）で並べる。エクスプローラの順と揃える。
+    const naturalCompare = (a, b) => a.localeCompare(b, 'ja', { numeric: true, sensitivity: 'base' });
+
+    // トラックは名前で管理するため、フォルダをまたいだ同名は区別できない。検出して報告する。
+    const mediaOrigin = {};
+    const collisionPairs = new Set();
+    function reportCollisions() {
+      if (!collisionPairs.size) return;
+      alert('同じ名前のトラックが見つかりました。このアプリはトラックを名前で管理するため、後から読んだ方が上書きされます。サブフォルダを含めて名前を重複させないでください。\n\n' + [...collisionPairs].join('\n'));
+      collisionPairs.clear();
+    }
+
     // ルートフォルダハンドル（File System Access API用）
     let rootDirHandle = null;
     // フォルダハンドルのキャッシュ { folderName: FileSystemDirectoryHandle }
@@ -585,6 +597,7 @@
         const entry = item.webkitGetAsEntry();
         if (entry && entry.isDirectory) await processFolderEntry(entry, entry.name);
       }
+      reportCollisions();
       // D&Dはwebkit Entry API（supportsFileSystemAccessと無関係）なのでここでモーダル起動
       if (pendingFolders.length > 0 && currentMetaIndex === 0) {
         currentMetaIndex = 0; showMetaModal();
@@ -632,6 +645,7 @@
           for (const { folderName, parentId, files: folderFiles } of subEntries) {
             await processFolderFiles(folderName, folderFiles, parentId);
           }
+          reportCollisions();
           // 全処理後にまとめてメタモーダル起動
           if (pendingFolders.length > 0 && currentMetaIndex === 0) {
             currentMetaIndex = 0; showMetaModal();
@@ -676,6 +690,7 @@
         await scanDirHandle(sub.handle, sub.name, isTopLevel ? folderName : parentFolderName);
       }
 
+      if (isTopLevel) reportCollisions();
       // ルートの処理が全部終わったらまとめてメタモーダル表示
       if (isTopLevel && pendingFolders.length > 0 && currentMetaIndex === 0) {
         showMetaModal();
@@ -712,19 +727,29 @@
       });
       if (!Object.keys(folderMedia).length && !Object.keys(folderCsv).length) return;
 
-      const mediaBases = Object.keys(folderMedia).sort();
-      const csvBases   = Object.keys(folderCsv).sort();
+      const mediaBases = Object.keys(folderMedia).sort(naturalCompare);
+      const csvBases   = Object.keys(folderCsv).sort(naturalCompare);
+      const folderPath = (parentFolderName ? parentFolderName + '/' : '') + folderName;
+
+      // 1) 同名のCSVを最優先で割り当てる
       const csvMapping = {};
-      if (csvBases.length === 1) {
-        mediaBases.forEach(mb => { csvMapping[mb] = csvBases[0]; });
-      } else if (csvBases.length === mediaBases.length) {
-        mediaBases.forEach((mb, i) => { csvMapping[mb] = csvBases[i]; });
-      } else {
-        mediaBases.forEach(mb => { if (folderCsv[mb]) csvMapping[mb] = mb; });
+      mediaBases.forEach(mb => { if (folderCsv[mb]) csvMapping[mb] = mb; });
+
+      // 2) 残りについては、トラック数と未使用CSV数がちょうど同数のときだけ順番に対応付ける
+      //    （1枚だけのCSVを全トラックに適用することはしない）
+      const usedCsv   = new Set(Object.values(csvMapping));
+      const freeMedia = mediaBases.filter(mb => !csvMapping[mb]);
+      const freeCsv   = csvBases.filter(cb => !usedCsv.has(cb));
+      if (freeMedia.length && freeMedia.length === freeCsv.length) {
+        freeMedia.forEach((mb, i) => { csvMapping[mb] = freeCsv[i]; });
       }
 
       mediaBases.forEach(mb => {
+        if (mediaFiles[mb] && mediaOrigin[mb] && mediaOrigin[mb] !== folderPath) {
+          collisionPairs.add(`\u300c${mb}\u300d: ${mediaOrigin[mb]} と ${folderPath}`);
+        }
         mediaFiles[mb] = folderMedia[mb];
+        mediaOrigin[mb] = folderPath;
         const csvBase = csvMapping[mb];
         if (csvBase) {
           csvFiles[mb] = folderCsv[csvBase];
