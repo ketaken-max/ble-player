@@ -414,7 +414,7 @@
       try {
         // 1. Intiface Central のローカルサーバーへWebSocket接続
         bpClient = new Buttplug.ButtplugClient('BLE Player');
-        const connector = new Buttplug.ButtplugBrowserWebsocketClientConnector('ws://127.0.0.1:12345');
+        const connector = new Buttplug.ButtplugBrowserWebsocketClientConnector('ws://localhost:12345');
 
         // デバイスが見つかった時のイベント
         bpClient.addListener('deviceadded', (device) => {
