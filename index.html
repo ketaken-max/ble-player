@@ -387,7 +387,6 @@
     let isBleBusy = false; 
     let isAutoReconnecting = false;
 
-    // ─── sendCommand ───
     async function sendCommand(direction, strength) {
       if (!bleChar || isBleBusy) return;
       
@@ -404,7 +403,6 @@
       }
     }
 
-    // ─── 共通のGATT接続＆キャラクタリスティック取得処理 ───
     async function connectGattSession() {
       bleServer = await bleDevice.gatt.connect(); 
       const service = await bleServer.getPrimaryService(UFO_SERVICE);
@@ -418,13 +416,12 @@
       if (proactiveRefreshTimer) clearTimeout(proactiveRefreshTimer);
       proactiveRefreshTimer = setTimeout(() => {
         if (bleDevice && bleDevice.gatt.connected && !isAutoReconnecting) {
-          console.log('140秒経過：OSの強制切断前にセッションを高速リフレッシュします');
+          console.log('140秒経過：セッションを高速リフレッシュします');
           bleDevice.gatt.disconnect();
         }
       }, 140000);
     }
 
-    // ─── startConnect ───
     async function startConnect() {
       const btn = document.getElementById('connectBtn');
       const err = document.getElementById('connectError');
@@ -449,7 +446,6 @@
       }
     }
 
-    // ─── Read専用キャラクタリスティックを使ったKeep-Alive ───
     function startWindowsKeepAlive() {
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       
@@ -460,16 +456,13 @@
         try {
           await bleReadChar1.readValue();
           await bleReadChar2.readValue();
-          console.log('Keep-Alive Read成功 (40ee3333 / 40ee4444)');
         } catch(e) {
-          console.warn('Keep-Alive Readスキップ:', e);
         } finally {
           isBleBusy = false;
         }
       }, 20000);
     }
 
-    // ─── enterMain ───
     function enterMain(deviceName) {
       document.getElementById('connect-screen').classList.add('hidden');
       if (deviceName) {
@@ -480,7 +473,6 @@
       }
     }
 
-/ ─── 完全自動再接続版 onDisconnected（ダイアログ一切なし・繋がるまで裏で自動リトライ） ───
     async function onDisconnected() {
       if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
       if (proactiveRefreshTimer) { clearTimeout(proactiveRefreshTimer); proactiveRefreshTimer = null; }
@@ -488,7 +480,6 @@
       bleReadChar1 = null;
       bleReadChar2 = null;
       
-      // すでに再接続ループが動いていれば二重起動しない
       if (!bleDevice || isAutoReconnecting) return;
 
       isAutoReconnecting = true;
@@ -499,26 +490,25 @@
       while (isAutoReconnecting) {
         attempt++;
         try {
-          // 1回目は0.3秒待ち（140秒リフレッシュ用）、2回目以降は0.8秒待ち
           const waitTime = (attempt === 1) ? 300 : 800;
           await new Promise(resolve => setTimeout(resolve, waitTime));
 
           await connectGattSession();
 
-          // 再接続成功時の表示復帰
           document.getElementById('bleDot').classList.remove('disconnected');
           document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 接続済';
-          console.log(`自動再接続完了（試行 ${attempt}回目）`);
+          console.log('自動再接続完了（試行 ' + attempt + '回目）');
           
           isAutoReconnecting = false;
-          return; // ループを抜けて完了
+          return;
         } catch (err) {
-          console.warn(`自動再接続リトライ中 (${attempt}回目):`, err.message);
-          document.getElementById('bleLabel').textContent = `自動再接続中… (${attempt})`;
+          console.warn('自動再接続リトライ中 (' + attempt + '回目):', err.message);
+          document.getElementById('bleLabel').textContent = '自動再接続中… (' + attempt + ')';
         }
       }
     }
 
+ 
 
     // ══════════════════════════════
     //  ライブラリ
