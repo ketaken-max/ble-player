@@ -77,6 +77,8 @@
     .tracks::-webkit-scrollbar-thumb:hover { background:var(--accent); }
     .track { flex-shrink:0; padding:7px 12px; border-radius:6px; border:1px solid var(--border); font-size:11px; cursor:pointer; transition:all .15s; display:flex; align-items:center; gap:8px; background:var(--bg3); }
     .track:hover { border-color:var(--accent); }
+    .track.unloaded { opacity:.45; cursor:not-allowed; }
+    .track.unloaded:hover { border-color:var(--border); }
     .track.active { border-color:var(--accent); background:rgba(124,106,255,.15); color:var(--accent); }
     .csv-badge { font-size:9px; font-family:'JetBrains Mono',monospace; padding:1px 5px; border-radius:3px; background:rgba(79,255,176,.15); color:var(--success); }
     .csv-badge.missing { background:rgba(255,183,77,.1); color:var(--warning); }
@@ -342,13 +344,13 @@
             <div class="manual-slider-wrap">
               <span class="manual-slider-label">音量</span>
               <input type="range" class="manual-slider" id="volumeSlider" min="0" max="100" value="100"
-                oninput="player.volume=this.value/100; document.getElementById('volumeLabel').textContent=this.value+'%'">
+                oninput="setVolume(this.value)">
               <span class="manual-value" id="volumeLabel">100%</span>
             </div>
             <div class="manual-slider-wrap">
               <span class="manual-slider-label">速度倍率</span>
               <input type="range" class="manual-slider" id="speedRateSlider" min="0" max="100" value="50"
-                oninput="speedRateValue=this.value/100; document.getElementById('speedRateLabel').textContent=this.value+'%'">
+                oninput="setSpeedRate(this.value)">
               <span class="manual-value" id="speedRateLabel">50%</span>
             </div>
           </div>
@@ -378,37 +380,42 @@
     const UFO_CHAR    = '40ee2222-63ec-4b7f-8ce7-712efd55b90e';
     const UFO_ID      = 0x02;
     let bleDevice = null, bleServer = null, bleChar = null, speedRateValue = 0.5;
-    let keepAliveTimer = null; // ★ 対策B用のタイマー変数をここに追加
-    let isBleBusy = false; 
+    let keepAliveTimer = null;
+    let isBleBusy = false;
     let isAutoReconnecting = false;
-    
+    let pendingCommand = null;   // 直近1コマンドだけ保持する（古い命令を機器に送らないため）
+    let lastCommand    = null;   // 送信に成功した最後のコマンド（維持パケットに再利用）
+    let keepAliveWarned = false;
 
-    // ─── 修正版 sendCommand（非同期の重複を絶対に許さない構造） ───
-    async function sendCommand(direction, strength) {
-      if (!bleChar) return;
-      
-      // もし前回の通信（送信、または維持用の読込）がまだ終わっていれば、今回のコマンドは即座に破棄して詰まりを防ぐ
-      if (isBleBusy) {
-        // ログが溢れるのを防ぐため、console.warnは出さずにリターンします
-        return; 
-      }
-      
-      isBleBusy = true; // 通信開始（ロック）
-      const spd   = Math.min(100, Math.floor(strength * speedRateValue));
-      const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
-      
-      try { 
-        // 応答なし送信（WithoutResponse）でパケットを最速処理
-        await bleChar.writeValueWithoutResponse(new Uint8Array([UFO_ID, 0x01, byte2])); 
-      }
-      catch(e) { 
-        console.warn('BLE送信エラー:', e); 
-      } finally {
-        isBleBusy = false; // 成功・失敗に関わらず必ずロックを解除
-      }
+    // ─── コマンドのエンコード（方向 + 強さ×速度倍率） ───
+    function encodeCommand(direction, strength) {
+      const spd = Math.min(100, Math.max(0, Math.floor(strength * speedRateValue)));
+      return [UFO_ID, 0x01, (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f)];
     }
 
-    // ─── 修正版 startConnect ───
+    // ─── sendCommand（最新1つだけを送る。同時に複数通過しても積み上げない） ───
+    function sendCommand(direction, strength) {
+      pendingCommand = encodeCommand(direction, strength);
+      return flushPendingCommand();
+    }
+
+    // 送信できる状態なら直近コマンドを流す。送信を開始できたときだけ true を返す。
+    function flushPendingCommand() {
+      if (!bleChar || isBleBusy || !pendingCommand) return false;
+      const cmd = pendingCommand;
+      isBleBusy = true;
+      // 応答なし送信（WithoutResponse）でパケットを最速処理
+      bleChar.writeValueWithoutResponse(new Uint8Array(cmd))
+        .then(() => { pendingCommand = null; lastCommand = cmd; keepAliveWarned = false; })
+        .catch(e => console.warn('BLE送信エラー:', e))
+        .finally(() => { isBleBusy = false; });
+      return true;
+    }
+
+    // 何も指令していない状態での「停止」（再生停止・曲切り替え・終了時）
+    function sendStop() { pendingCommand = encodeCommand(0, 0); return flushPendingCommand(); }
+
+    // ─── 修正版 startConnect ───    // ─── 修正版 startConnect ───
     async function startConnect() {
       const btn = document.getElementById('connectBtn');
       const err = document.getElementById('connectError');
@@ -435,38 +442,33 @@
       }
     }
 
-       // ─── 対策C：Windowsの省電力タイマーを完全に黙らせる5秒間隔の超高頻度ハートビート ───
-    function startWindowsKeepAlive() {
-      if (keepAliveTimer) clearInterval(keepAliveTimer);
-      
-      keepAliveTimer = setInterval(async () => {
-        if (!bleChar) return;
-        
-        // 通常の送信（isBleBusy）が行われている間は、今回の維持パケットをスキップして衝突を防ぐ
-        if (isBleBusy) return; 
-        
-        isBleBusy = true; // ロック
-        try {
-          // 【超強力刺激1】UFOSAが誤動作しない「速度0、方向0」の無害なコマンドを5秒に1回強制的にWrite送信
-          // ※UFOSAのプロトコル上、[UFO_ID, 0x01, 0x00]（停止コマンド）を上書き送信します
-          const dummyCommand = new Uint8Array([UFO_ID, 0x01, 0x00]);
-          await bleChar.writeValueWithoutResponse(dummyCommand);
-          
-          // 【超強力刺激2】間髪入れずにReadも実行し、OSに「双方向で活発に通信中」と誤認させる
-          await bleChar.readValue(); 
-          
-          console.log('Windows生存ハートビート（Write&Read）送信成功');
-        } catch(e) {
-          // 片方が非対応でエラーになっても、Windowsの通信スタック（ドライバ層）は確実に叩かれます
-          console.log('Windows生存ハートビート実行（エラー無視で継続）');
-        } finally {
-          isBleBusy = false; // ロック解除
-        }
-      }, 5000); // ★100秒ではなく「5秒（5000ms）」に1回実行します
+    // ─── 「接続せずに続ける（テスト用）」: BLEなしでメイン画面へ進む ───
+    function skipConnect() {
+      document.getElementById('connectError').textContent = '';
+      enterMain(null);
     }
 
-    
-     // ─── 修正版 enterMain（セキュリティエラーによるプログラム停止を回避） ───
+    // ─── 接続維持（Windows側でGATTが切れる対策）: 5秒ごとに直前のコマンドを再送する ───
+    // 「停止(0x00)」を定期的に打つと動作中に止まってしまうため、最後のコマンドをそのまま再送する。
+    function startWindowsKeepAlive() {
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
+      keepAliveTimer = setInterval(async () => {
+        if (!bleChar || isBleBusy) return;
+        if (pendingCommand) { flushPendingCommand(); return; }
+        if (!lastCommand) return;      // まだ何も送っていないときは打たない
+        isBleBusy = true;
+        try {
+          await bleChar.writeValueWithoutResponse(new Uint8Array(lastCommand));
+        } catch(e) {
+          // 失敗してもドライバ層は叩ける。ログは初回だけ出す（5秒ごとに溢れるのを防ぐ）
+          if (!keepAliveWarned) { keepAliveWarned = true; console.warn('維持パケットの送信に失敗:', e); }
+        } finally {
+          isBleBusy = false;
+        }
+      }, 5000);
+    }
+
+        // ─── 修正版 enterMain     // ─── 修正版 enterMain（セキュリティエラーによるプログラム停止を回避） ───
     function enterMain(deviceName) {
       document.getElementById('connect-screen').classList.add('hidden');
       if (deviceName) {
@@ -479,7 +481,7 @@
       // try-catchで囲むことで、フォルダ選択ダイアログがセキュリティ制限で弾かれても
       // プログラム全体がクラッシュしてBLE通信に悪影響を及ぼすのを防ぎます
       try {
-        if (!isTouchDevice()) {
+        if (supportsFileSystemAccess) {
           document.getElementById('addFolderBtn').click();
         }
       } catch (folderError) {
@@ -504,8 +506,9 @@
           const service = await bleServer.getPrimaryService(UFO_SERVICE);
           bleChar = await service.getCharacteristic(UFO_CHAR);
           
-          // 再度タイマーを起動
+          // 再度タイマーを起動し、切れる直前の状態を機器に送り直す
           startWindowsKeepAlive();
+          flushPendingCommand();
           
           document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 復帰済';
           console.log('Windows対策: 自動高速再接続に成功しました！');
@@ -535,6 +538,48 @@
     // ══════════════════════════════
     let library = {};
 
+    // 音量と速度倍率はこのブラウザに保持する（既定: 音量100% / 倍率50%）
+    function setVolume(v) {
+      player.volume = Math.max(0, Math.min(1, v/100));
+      localStorage.setItem('ble-volume', String(v));
+      document.getElementById('volumeLabel').textContent = v + '%';
+    }
+    function setSpeedRate(v) {
+      speedRateValue = Math.max(0, Math.min(1, v/100));
+      localStorage.setItem('ble-speed-rate', String(v));
+      document.getElementById('speedRateLabel').textContent = v + '%';
+    }
+    function restoreUIPreferences() {
+      const v = localStorage.getItem('ble-volume');
+      if (v !== null) { document.getElementById('volumeSlider').value = v; setVolume(v); }
+      const s = localStorage.getItem('ble-speed-rate');
+      if (s !== null) { document.getElementById('speedRateSlider').value = s; setSpeedRate(s); }
+    }
+
+    // File System Access APIが無い環境（Androidなど）で編集したCSVをこのブラウザに保存し、
+    // フォルダ読み込み後に元のCSVへ上書きして反映する。
+    const CSV_EDIT_KEY = 'ble-csv-edits';
+    function loadCsvEdits() { try { return JSON.parse(localStorage.getItem(CSV_EDIT_KEY) || '{}'); } catch { return {}; } }
+    function applyCsvOverride(base) {
+      const text = loadCsvEdits()[base];
+      if (typeof text !== 'string') return false;
+      csvFiles[base] = new File([text], base + '.csv', { type: 'text/csv' });
+      return true;
+    }
+    function clearCsvEdit(base) {
+      const edits = loadCsvEdits(); delete edits[base];
+      localStorage.setItem(CSV_EDIT_KEY, JSON.stringify(edits));
+      if (csvFiles[base]) delete csvFiles[base];
+    }
+    function hasCsvEdit(base) { return typeof loadCsvEdits()[base] === 'string'; }
+    // ライブラリにあるトラックについて、保存済みの編集CSVを反映する
+    function applyAllCsvEdits() {
+      Object.values(library).forEach(w => {
+        const bases = [...(w.tracks||[]), ...Object.values(w.children||{}).flat()].map(t => t.base);
+        bases.forEach(b => applyCsvOverride(b));
+      });
+    }
+
     function loadLibraryFromStorage() {
       try { library = JSON.parse(localStorage.getItem('ble-library') || '{}'); }
       catch { library = {}; }
@@ -552,8 +597,34 @@
       const file = event.target.files[0]; if (!file) return;
       const reader = new FileReader();
       reader.onload = (e) => {
-        try { library = JSON.parse(e.target.result); saveLibraryToStorage(); renderLibrarySidebar(); alert('ライブラリを読み込みました'); }
-        catch { alert('ファイルの形式が正しくありません'); }
+        let parsed;
+        try { parsed = JSON.parse(e.target.result); }
+        catch { alert('ファイルの形式が正しくありません'); return; }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { alert('ライブラリJSONの形式が正しくありません'); return; }
+        // 欠けた項目は補って、読み込み後に表示が壊れないようにする
+        const normalized = {};
+        for (const [key, w] of Object.entries(parsed)) {
+          if (!w || typeof w !== 'object') continue;
+          normalized[key] = {
+            id: w.id || key,
+            folderName: w.folderName || '',
+            title: w.title || w.folderName || key,
+            circle: w.circle || '', cv: w.cv || '', rj: w.rj || '',
+            addedAt: typeof w.addedAt === 'number' ? w.addedAt : Date.now(),
+            plays: typeof w.plays === 'number' ? w.plays : 0,
+            fav: !!w.fav,
+            tracks: Array.isArray(w.tracks) ? w.tracks.filter(t => t && typeof t.base === 'string') : [],
+            children: (w.children && typeof w.children === 'object')
+              ? Object.fromEntries(Object.entries(w.children).map(([k, v]) => [k, Array.isArray(v) ? v.filter(t => t && typeof t.base === 'string') : []]))
+              : {},
+          };
+        }
+        const count = Object.keys(normalized).length;
+        if (!count) { alert('有効な作品エントリーがありませんでした'); return; }
+        if (!confirm(`現在のライブラリ（${Object.keys(library).length}件）に ${count} 件を統合します。同じフォルダ名の作品は読み込んだ内容で上書きされます。\nよければ OK を選んでください。`)) return;
+        library = { ...library, ...normalized };
+        saveLibraryToStorage(); applyAllCsvEdits(); renderLibrarySidebar();
+        alert(`${count} 件を読み込みました`);
       };
       reader.readAsText(file); event.target.value = '';
     }
@@ -566,9 +637,12 @@
 
     // File System Access API対応判定
     const supportsFileSystemAccess = 'showDirectoryPicker' in window;
-    // タッチデバイス判定（Android ChromeはsupportsFileSystemAccessがtrueになるため別途判定）
-    const isTouchDevice = () => navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 
+    const AUDIO_EXT = ['mp3','wav','ogg','oga','m4a','aac','flac','opus'];
+    const VIDEO_EXT = ['mp4','m4v','webm','mov','ogv'];
+
+    // 作品名・フォルダ名・ファイル名はユーザー入力なので、innerHTMLにそのまま入れない
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     // ファイル名は自然順（track2 < track10）で並べる。エクスプローラの順と揃える。
     const naturalCompare = (a, b) => a.localeCompare(b, 'ja', { numeric: true, sensitivity: 'base' });
 
@@ -605,7 +679,7 @@
     });
 
     document.getElementById('addFolderBtn').addEventListener('click', async () => {
-      if (supportsFileSystemAccess && !isTouchDevice()) {
+      if (supportsFileSystemAccess) {
         // PC: File System Access API
         try {
           const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
@@ -723,7 +797,7 @@
       files.forEach(file => {
         const ext  = file.name.split('.').pop().toLowerCase();
         const base = file.name.replace(/\.[^.]+$/, '');
-        if (['mp4','mp3','wav','ogg','m4a','webm'].includes(ext)) {
+        if (AUDIO_EXT.includes(ext) || VIDEO_EXT.includes(ext)) {
           // 同じフォルダ内で base 名が重複している（拡張子が違う）場合は後勝ちになる
           if (folderMedia[base]) sameFolderDup.push(`${folderMedia[base].name} と ${file.name}`);
           folderMedia[base] = file;
@@ -766,6 +840,8 @@
           // （残ると、このフォルダにCSVが無いトラックへ前のフォルダのCSVがそのまま当たってしまう）
           delete csvFiles[mb]; delete csvHandles[mb];
         }
+        // このブラウザに保存された編集CSVがあれば、フォルダ内のCSVより優先する
+        applyCsvOverride(mb);
       });
 
       const tracks = mediaBases.map(base => ({ base }));
@@ -891,10 +967,10 @@
       let works   = Object.values(library);
 
       if (query) works = works.filter(w =>
-        w.title.toLowerCase().includes(query)  ||
-        w.circle.toLowerCase().includes(query) ||
-        w.cv.toLowerCase().includes(query)     ||
-        w.rj.toLowerCase().includes(query)
+        (w.title||'').toLowerCase().includes(query)  ||
+        (w.circle||'').toLowerCase().includes(query) ||
+        (w.cv||'').toLowerCase().includes(query)     ||
+        (w.rj||'').toLowerCase().includes(query)
       );
 
       // トラックまたはサブフォルダを持つ作品のみ表示
@@ -908,10 +984,10 @@
       });
 
       works.sort((a,b) => {
-        if (sort==='added')  return a.addedAt - b.addedAt;
-        if (sort==='title')  return a.title.localeCompare(b.title,'ja');
-        if (sort==='circle') return a.circle.localeCompare(b.circle,'ja');
-        if (sort==='plays')  return b.plays - a.plays;
+        if (sort==='added')  return (a.addedAt||0) - (b.addedAt||0);
+        if (sort==='title')  return (a.title||'').localeCompare(b.title||'','ja',{numeric:true});
+        if (sort==='circle') return (a.circle||'').localeCompare(b.circle||'','ja',{numeric:true});
+        if (sort==='plays')  return (b.plays||0) - (a.plays||0);
         if (sort==='fav')    return (b.fav?1:0)-(a.fav?1:0);
         return 0;
       });
@@ -934,12 +1010,12 @@
         div.innerHTML = `
           <div class="work-item-header">
             <span style="font-size:10px;color:var(--text-dim);margin-right:4px;flex-shrink:0;">${hasContent?(isExpanded?'▾':'▸'):'　'}</span>
-            <span class="work-title">${w.title}</span>
+            <span class="work-title">${esc(w.title)}</span>
             <button class="fav-btn ${w.fav?'active':''}" data-id="${w.id}">★</button>
           </div>
-          <div class="work-meta">${[w.circle,w.cv].filter(Boolean).join('／')||'情報なし'}</div>
-          ${w.rj?`<div class="work-rj">${w.rj}</div>`:''}
-          <div class="work-plays">再生 ${w.plays}回</div>`;
+          <div class="work-meta">${esc([w.circle,w.cv].filter(Boolean).join('／'))||'情報なし'}</div>
+          ${w.rj?`<div class="work-rj">${esc(w.rj)}</div>`:''}
+          <div class="work-plays">再生 ${w.plays||0}回</div>`;
 
         div.addEventListener('click', (e) => {
           if (e.target.classList.contains('fav-btn')) return;
@@ -993,9 +1069,10 @@
         const row = document.createElement('div');
         row.style.cssText = `padding:6px 14px 6px ${14+depth*14}px; cursor:pointer; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-dim); display:flex; align-items:center; gap:6px; border-left:3px solid transparent; transition:all .15s;`;
         row.innerHTML = `
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">▷ ${t.base}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">▷ ${esc(t.base)}</span>
           <span style="font-size:9px;padding:1px 5px;border-radius:3px;flex-shrink:0;${hasCSV?'background:rgba(79,255,176,.15);color:var(--success)':'background:rgba(255,183,77,.1);color:var(--warning)'}">${hasCSV?'CSV':'未割当'}</span>
-          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-file" data-base="${t.base}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-file" data-base="${t.base}" title="削除">✕</button>`:''}`;
+          ${hasCsvEdit(t.base)?`<span style="font-size:9px;padding:1px 5px;border-radius:3px;flex-shrink:0;background:rgba(124,106,255,.18);color:var(--accent)">編集済</span>`:''}
+          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-file" data-base="${esc(t.base)}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-file" data-base="${esc(t.base)}" title="削除">✕</button>`:''}`;
         row.addEventListener('mouseenter', ()=>{ row.style.background='var(--bg3)'; });
         row.addEventListener('mouseleave', ()=>{ row.style.background=''; });
         row.addEventListener('click', (e) => {
@@ -1034,9 +1111,9 @@
         row.style.cssText = `padding:7px 14px 7px ${14+depth*14}px; cursor:pointer; font-size:11px; font-family:'Syne',sans-serif; color:var(--text-dim); display:flex; align-items:center; gap:6px; transition:all .15s;`;
         row.innerHTML = `
           <span style="font-size:10px;">${isExp?'▾':'▸'}</span>
-          <span style="font-weight:600;flex:1;">${subName}</span>
+          <span style="font-weight:600;flex:1;">${esc(subName)}</span>
           <span style="font-size:9px;font-family:'JetBrains Mono',monospace;">${subTracks.length}曲</span>
-          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-dir" data-name="${subName}" data-parent="${parentWorkId}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-dir" data-name="${subName}" data-parent="${parentWorkId}" title="削除">✕</button>`:''}`;
+          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-dir" data-name="${esc(subName)}" data-parent="${parentWorkId}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-dir" data-name="${esc(subName)}" data-parent="${parentWorkId}" title="削除">✕</button>`:''}`;
         row.addEventListener('mouseenter', ()=>{ row.style.background='var(--bg3)'; });
         row.addEventListener('mouseleave', ()=>{ row.style.background=''; });
         row.addEventListener('click', (e) => {
@@ -1069,7 +1146,6 @@
     function selectWork(workId) {
       currentWorkId = workId;
       const w = library[workId];
-      w.plays++; saveLibraryToStorage();
 
       document.getElementById('work-title-display').textContent  = w.title;
       document.getElementById('work-rj-display').textContent     = w.rj;
@@ -1093,13 +1169,16 @@
         const div = document.createElement('div');
         div.className = 'track' + (i===0?' active':'') + (isLoaded?'':' unloaded');
         div.innerHTML = `<span>${String(i+1).padStart(2,'0')}. ${t.base}</span><span class="csv-badge ${hasCSV?'':'missing'}">${hasCSV?'CSV':'未割当'}</span>`;
-        div.addEventListener('click', () => { if(isLoaded) loadTrack(t.base); });
+        div.addEventListener('click', () => {
+          if (!isLoaded) { alert('このトラックのファイルはまだ読み込まれていません。「＋ フォルダを追加」でフォルダをもう一度選択してください。'); return; }
+          loadTrack(t.base);
+        });
         // 右クリックメニュー
         div.addEventListener('contextmenu', (e) => {
           e.preventDefault();
-          showContextMenu(e.clientX, e.clientY, [
-            { label: 'CSVを編集', action: () => { currentTrack=t.base; openCsvSelect(); } },
-          ]);
+          const items = [{ label: 'CSVを編集', action: () => { currentTrack=t.base; openCsvSelect(); } }];
+          if (hasCsvEdit(t.base)) items.push({ separator: true }, { label: '編集CSVの反映を取り消す', action: () => { clearCsvEdit(t.base); renderLibrarySidebar(); } });
+          showContextMenu(e.clientX, e.clientY, items);
         });
         tracksEl.appendChild(div);
       });
@@ -1111,11 +1190,15 @@
     //  再生
     // ══════════════════════════════
     const player = document.getElementById('media-player');
+    let playCounted = false;   // 1トラックにつき1回だけ再生回数に加える
+    let mediaBlobURL = null;   // 前トラックの ObjectURL を解放する
 
     function loadTrack(base) {
       player.pause();
       document.getElementById('playBtn').textContent = '▶';
-      sendCommand(0, 0);
+      sendStop();
+      playCounted = false;
+      if (mediaBlobURL) { URL.revokeObjectURL(mediaBlobURL); mediaBlobURL = null; }
       currentTrack      = base;
       currentTrackIndex = trackList.indexOf(base);
       const file = mediaFiles[base];
@@ -1124,11 +1207,14 @@
         t.classList.toggle('active', t.querySelector('span').textContent.includes(base));
       });
 
-      const isAudio = file.type.startsWith('audio/');
+      // MIME type が空（FSA/webkitdirectoryで付かないことがある）でも判るように拡張子を優先する
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      const isAudio = AUDIO_EXT.includes(ext) || (!VIDEO_EXT.includes(ext) && (file.type || '').startsWith('audio/'));
 
       if (isAudio) {
         // 音声ファイル：playerを非表示にしてサムネイル表示
-        player.src = URL.createObjectURL(file);
+        mediaBlobURL = URL.createObjectURL(file);
+        player.src = mediaBlobURL;
         player.load();
         player.style.display = 'none';
         document.querySelector('.no-media').style.display = 'none';
@@ -1136,7 +1222,8 @@
         showAudioThumbnail(base);
       } else {
         // 動画ファイル
-        player.src = URL.createObjectURL(file);
+        mediaBlobURL = URL.createObjectURL(file);
+        player.src = mediaBlobURL;
         player.load();
         player.style.display = 'block';
         document.querySelector('.no-media').style.display = 'none';
@@ -1148,42 +1235,30 @@
     }
 
     // サムネイル要素
-    let thumbnailEl = null;
+    let thumbnailEl = null, thumbnailURL = null;
     function showAudioThumbnail(base) {
       hideThumbnail();
-      // 同名の画像ファイルを探す（jpg/png/webp）
-      const imgExts = ['jpg','jpeg','png','webp','gif'];
-      let imgFile = null;
-      for (const ext of imgExts) {
-        if (mediaFiles[base + '_thumb'] || mediaFiles[base]) {
-          // 同じフォルダの画像を探す
-          const w = library[currentWorkId];
-          if (w) {
-            const folderHandle = dirHandles[w.folderName];
-            if (folderHandle) {
-              // 非同期で画像を検索
-              searchThumbnailInFolder(folderHandle, base);
-              return;
-            }
-          }
-        }
-        break;
-      }
+      const w = currentWorkId ? library[currentWorkId] : null;
+      const folderHandle = w ? dirHandles[w.folderName] : null;
+      if (folderHandle) { searchThumbnailInFolder(folderHandle, base); return; }
+      showDefaultAudioView();
     }
 
+    // 画像は「トラック名と同名 → cover / jacket 等の決まり名前 → 最初に見つかった画像」の順で選ぶ
     async function searchThumbnailInFolder(folderHandle, base) {
-      const imgExts = ['jpg','jpeg','png','webp','gif'];
+      const imgExts  = ['jpg','jpeg','png','webp','gif'];
+      const priority = [base.toLowerCase(), 'cover', 'jacket', 'thumbnail', 'thumb', 'album', 'main', 'title'];
+      let fallback = null;
       try {
         for await (const entry of folderHandle.values()) {
-          if (entry.kind === 'file') {
-            const ext = entry.name.split('.').pop().toLowerCase();
-            if (imgExts.includes(ext)) {
-              const imgFile = await entry.getFile();
-              displayThumbnail(imgFile);
-              return;
-            }
-          }
+          if (entry.kind !== 'file') continue;
+          const ext  = (entry.name.split('.').pop() || '').toLowerCase();
+          if (!imgExts.includes(ext)) continue;
+          const stem = entry.name.replace(/\.[^.]+$/, '').toLowerCase();
+          if (priority.includes(stem)) { displayThumbnail(await entry.getFile()); return; }
+          if (!fallback) fallback = entry;
         }
+        if (fallback) { displayThumbnail(await fallback.getFile()); return; }
       } catch(e) {}
       // 画像が見つからない場合はデフォルト表示
       showDefaultAudioView();
@@ -1193,7 +1268,8 @@
       hideThumbnail();
       const videoWrap = document.getElementById('video-wrap');
       thumbnailEl = document.createElement('img');
-      thumbnailEl.src = URL.createObjectURL(imgFile);
+      thumbnailURL = URL.createObjectURL(imgFile);
+      thumbnailEl.src = thumbnailURL;
       thumbnailEl.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
       videoWrap.appendChild(thumbnailEl);
     }
@@ -1209,6 +1285,7 @@
 
     function hideThumbnail() {
       if (thumbnailEl) { thumbnailEl.remove(); thumbnailEl = null; }
+      if (thumbnailURL) { URL.revokeObjectURL(thumbnailURL); thumbnailURL = null; }
     }
 
     player.addEventListener('timeupdate', () => {
@@ -1217,12 +1294,11 @@
       document.getElementById('timedur').textContent     = formatTime(dur);
       document.getElementById('seekbarFill').style.width = (dur?cur/dur*100:0)+'%';
       document.getElementById('tlPlayhead').style.left   = (dur?cur/dur*100:0)+'%';
-      processBLESchedule(cur*1000); // time_ms はミリ秒
     });
 
     player.addEventListener('ended', () => {
       document.getElementById('playBtn').textContent = '▶';
-      sendCommand(0,0);
+      sendStop();
       if (isLoopAll && trackList.length) {
         currentTrackIndex = (currentTrackIndex+1) % trackList.length;
         loadTrack(trackList[currentTrackIndex]);
@@ -1231,8 +1307,15 @@
       }
     });
 
-    player.addEventListener('pause',  () => sendCommand(0,0));
-    player.addEventListener('play',   () => { lastSentIndex=-1; });
+    player.addEventListener('pause',  () => sendStop());
+    player.addEventListener('play',   () => {
+      lastSentIndex=-1;
+      if (!playCounted && currentWorkId && library[currentWorkId]) {
+        library[currentWorkId].plays = (library[currentWorkId].plays||0)+1;
+        saveLibraryToStorage();
+        playCounted = true;
+      }
+    });
     player.addEventListener('seeked', () => { lastSentIndex=-1; });
 
     // seekbarスライド＋スマホ全画面スワイプ
@@ -1336,15 +1419,31 @@
     //  CSV
     // ══════════════════════════════
     let schedule=[], lastSentIndex=-1;
+    let scheduleTickerId = null;
+
+    // timeupdate は約4Hzしか来ないため、rAFで再生位置を照合する（time_ms はミリ秒）
+    function scheduleTicker() {
+      scheduleTickerId = requestAnimationFrame(scheduleTicker);
+      if (!schedule.length || player.paused || !player.duration) return;
+      processBLESchedule(player.currentTime * 1000);
+    }
+    scheduleTickerId = requestAnimationFrame(scheduleTicker);
 
     function loadCSV(file) {
       const reader = new FileReader();
       reader.onload = (e) => {
-        const lines = e.target.result.trim().split('\n').slice(1);
+        const lines = e.target.result.replace(/\r/g, '').trim().split('\n').slice(1);
         schedule = lines.map(line => {
           const [time_ms,direction,strength] = line.split(',').map(s=>s.trim());
-          return { time_ms:parseInt(time_ms), direction:parseInt(direction), strength:parseInt(strength) };
-        }).filter(r=>!isNaN(r.time_ms));
+          const t = parseInt(time_ms);
+          if (isNaN(t) || t < 0) return null;
+          return {
+            time_ms: t,
+            direction: parseInt(direction) === 1 ? 1 : 0,
+            strength: Math.max(0, Math.min(100, parseInt(strength) || 0))
+          };
+        }).filter(Boolean).sort((a,b) => a.time_ms - b.time_ms);
+        lastSentIndex = -1; pendingCommand = null;
         // durationが既に取得済みならすぐ描画、まだならloadedmetadataを待つ
         if (player.readyState >= 1 && player.duration) {
           renderTimeline();
@@ -1375,10 +1474,13 @@
 
     function processBLESchedule(currentMs) {
       if (!schedule.length) return;
-      for (let i=lastSentIndex+1; i<schedule.length; i++) {
-        if (schedule[i].time_ms<=currentMs) { sendCommand(schedule[i].direction,schedule[i].strength); lastSentIndex=i; }
-        else break;
-      }
+      // 同じティックで複数行を通過したら、最後の1つだけ送る（機器には最新の状態だけが意味を持つ）
+      let next = lastSentIndex;
+      while (next + 1 < schedule.length && schedule[next + 1].time_ms <= currentMs) next++;
+      if (next === lastSentIndex) return;
+      lastSentIndex = next;
+      pendingCommand = encodeCommand(schedule[next].direction, schedule[next].strength);
+      flushPendingCommand();
     }
 
     // タイムラインスライド（スムーズシーク）
@@ -1497,7 +1599,7 @@
           const file = await entry.getFile();
           const newHandle = await dstHandle.getFileHandle(entry.name, { create: true });
           const writable  = await newHandle.createWritable();
-          await writable.write(await file.arrayBuffer());
+          await writable.write(file);
           await writable.close();
         } else if (entry.kind === 'directory') {
           const subDst = await dstHandle.getDirectoryHandle(entry.name, { create: true });
@@ -1522,8 +1624,7 @@
         // 新ファイルを作成してコピー
         const newFileHandle = await parentHandle.getFileHandle(newName + '.' + ext, { create: true });
         const writable = await newFileHandle.createWritable();
-        const buf = await mFile.arrayBuffer();
-        await writable.write(buf);
+        await writable.write(mFile);
         await writable.close();
 
         // 旧ファイルを削除
@@ -1586,7 +1687,7 @@
               const file = await entry.getFile();
               const newHandle = await newDirHandle.getFileHandle(entry.name, { create: true });
               const writable  = await newHandle.createWritable();
-              await writable.write(await file.arrayBuffer());
+              await writable.write(file);
               await writable.close();
             }
           }
@@ -1746,7 +1847,7 @@
 
     function toggleMode() {
       const btn=document.getElementById('modeBtn');
-      const modes=['CSV モード','ランダム','波形連動'];
+      const modes=['CSV モード','ランダム（未実装）','波形連動（未実装）'];
       let idx=modes.indexOf(btn.textContent.trim());
       idx=(idx+1)%modes.length;
       btn.textContent=modes[idx];
@@ -1762,6 +1863,8 @@
       document.getElementById('connect-screen').classList.add('hidden');
     }
     loadLibraryFromStorage();
+    restoreUIPreferences();
+    applyAllCsvEdits();
     renderLibrarySidebar();
   </script>
 </body>

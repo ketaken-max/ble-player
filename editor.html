@@ -329,6 +329,18 @@
     }
 
     // ══════════════════════════════
+    //  File System Access APIが無い環境（Androidなど）でのCSV保存
+    //  このブラウザに保存し、メイン画面のフォルダ読み込み時に元のCSVへ上書きして反映する
+    // ══════════════════════════════
+    const CSV_EDIT_KEY = 'ble-csv-edits';
+    function loadCsvEdits() { try { return JSON.parse(localStorage.getItem(CSV_EDIT_KEY) || '{}'); } catch { return {}; } }
+    function saveCsvEdit(track, text) {
+      const edits = loadCsvEdits();
+      edits[track] = text;
+      localStorage.setItem(CSV_EDIT_KEY, JSON.stringify(edits));
+    }
+
+    // ══════════════════════════════
     //  サイドバー
     // ══════════════════════════════
     function openSidebar()  { document.getElementById('sidebar').classList.add('open'); document.getElementById('sidebar-overlay').classList.add('open'); }
@@ -607,11 +619,17 @@
         }
       }
 
-      // スマホ or フォールバック：sessionStorage経由
-      sessionStorage.setItem('saved-csv-text',  text);
-      sessionStorage.setItem('saved-csv-track', trackName);
-      sessionStorage.setItem('saved-csv-name',  csvName);
-      alert('保存しました。メイン画面に戻ると反映されます。');
+      // スマホ or フォールバック：このブラウザに保存してメイン画面で反映する
+      if (!trackName || trackName === '-') {
+        alert('どのトラック用のCSVか分からないため保存できませんでした。CSV読み込みではなく、メイン画面の「CSV編集」から開いてください。');
+        return;
+      }
+      try {
+        saveCsvEdit(trackName, text);
+        alert(`編集内容をこのブラウザに保存しました（${trackName}）。\nメイン画面ではこの内容が元のCSVより優先されます。フォルダを差し替える場合はトラックの右クリックから「編集CSVの反映を取り消す」を選んでください。`);
+      } catch(e) {
+        alert('保存に失敗しました: ' + e.message);
+      }
     }
 
     // ══════════════════════════════
