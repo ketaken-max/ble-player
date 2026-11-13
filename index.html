@@ -399,7 +399,7 @@
       
       try { 
         // 応答なし送信（WithoutResponse）でパケットを最速処理
-        await bleChar.writeValueWithoutResponse(new Uint8Array([UFO_ID, 0x01, byte2])); 
+        await bleChar.writeValueWithResponse(new Uint8Array([UFO_ID, 0x01, byte2])); 
       }
       catch(e) { 
         console.warn('BLE送信エラー:', e); 
@@ -450,7 +450,7 @@
           // 【超強力刺激1】UFOSAが誤動作しない「速度0、方向0」の無害なコマンドを5秒に1回強制的にWrite送信
           // ※UFOSAのプロトコル上、[UFO_ID, 0x01, 0x00]（停止コマンド）を上書き送信します
           const dummyCommand = new Uint8Array([UFO_ID, 0x01, 0x00]);
-          await bleChar.writeValueWithoutResponse(dummyCommand);
+          await bleChar.writeValueWithResponse(dummyCommand);
           
           // 【超強力刺激2】間髪入れずにReadも実行し、OSに「双方向で活発に通信中」と誤認させる
           await bleChar.readValue(); 
