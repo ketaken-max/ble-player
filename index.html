@@ -495,7 +495,7 @@ function enterMain(deviceName) {
   }
 }
 
-// ─── 修正版 onDisconnected ───
+// ─── 修正版 onDisconnected（待機時間＋3回リトライでダイアログを出さずに復帰） ───
 async function onDisconnected() {
   if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
   if (proactiveRefreshTimer) { clearTimeout(proactiveRefreshTimer); proactiveRefreshTimer = null; }
@@ -505,20 +505,28 @@ async function onDisconnected() {
   
   if (bleDevice && !isAutoReconnecting) {
     isAutoReconnecting = true;
-    document.getElementById('bleLabel').textContent = '自動再接続中…';
+    document.getElementById('bleLabel').textContent = 'リフレッシュ中…';
     
-    try {
-      await connectGattSession(); // ★共通関数を呼ぶことでRead取得とタイマーも自動復帰
-      document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 接続済';
-      console.log('自動高速再接続に成功しました');
-      isAutoReconnecting = false;
-      return;
-    } catch(reconnectError) {
-      console.error('自動再接続に失敗しました:', reconnectError);
-      isAutoReconnecting = false;
+    // 最大3回まで自動再接続を試みる（ダイアログを出さない）
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        // ★重要：切断直後はデバイスがアドバタイズを再開するまで300ms待つ
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        await connectGattSession();
+        document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 接続済';
+        console.log(`高速リフレッシュ再接続に成功しました（試行 ${attempt}回目）`);
+        isAutoReconnecting = false;
+        return; // 成功したらここで終了（ダイアログは出さない）
+      } catch(reconnectError) {
+        console.warn(`再接続リトライ ${attempt}/3 失敗:`, reconnectError);
+      }
     }
+    
+    isAutoReconnecting = false;
   }
 
+  // 3回リトライしても本当に繋がらない場合（電源オフなど）のみダイアログを出す
   document.getElementById('bleDot').classList.add('disconnected');
   document.getElementById('bleLabel').textContent = '切断されました';
   
@@ -529,6 +537,8 @@ async function onDisconnected() {
     document.getElementById('connectBtn').textContent = 'UFO SA に接続する';
     document.getElementById('connectError').textContent = '';
   }
+}
+}
 }
 
 
