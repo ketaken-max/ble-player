@@ -4,9 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>BLE Player</title>
-<script src="https://unpkg.com"></script>
-
-
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
   <style>
     :root {
@@ -375,94 +372,101 @@
 
   <script>
     // ══════════════════════════════
-    //  Intiface Central (Buttplug.js) 接続・制御
+    //  BLE
     // ══════════════════════════════
-    let bpClient = null;
-    let bpDevice = null;
-    let speedRateValue = 0.5;
-    let isBleBusy = false;
+    const UFO_SERVICE = '40ee1111-63ec-4b7f-8ce7-712efd55b90e';
+    const UFO_CHAR    = '40ee2222-63ec-4b7f-8ce7-712efd55b90e';
+    const UFO_ID      = 0x02;
+    let bleDevice = null, bleServer = null, bleChar = null, speedRateValue = 0.5;
+    let keepAliveTimer = null; // ★ 対策B用のタイマー変数をここに追加
+    let isBleBusy = false; 
+    let isAutoReconnecting = false;
+    
 
-    // ─── sendCommand（既存の呼び出し方と完全互換） ───
+    // ─── 修正版 sendCommand（非同期の重複を絶対に許さない構造） ───
     async function sendCommand(direction, strength) {
-      if (!bpDevice || isBleBusy) return;
-
-      isBleBusy = true;
-      // 0〜100の強度 × speedRateValue を、Buttplug用の 0.0 〜 1.0 の小数に変換
-      const spd = Math.min(100, Math.floor(strength * speedRateValue));
-      const normalizedSpeed = spd / 100.0;
-      const clockwise = (direction === 1);
-
-      try {
-        // U.F.O. SA に回転命令を送信（速度 0.0 〜 1.0、回転方向 true / false）
-        await bpDevice.rotate(normalizedSpeed, clockwise);
-      } catch (e) {
-        console.warn('Intiface送信エラー:', e);
+      if (!bleChar) return;
+      
+      // もし前回の通信（送信、または維持用の読込）がまだ終わっていれば、今回のコマンドは即座に破棄して詰まりを防ぐ
+      if (isBleBusy) {
+        // ログが溢れるのを防ぐため、console.warnは出さずにリターンします
+        return; 
+      }
+      
+      isBleBusy = true; // 通信開始（ロック）
+      const spd   = Math.min(100, Math.floor(strength * speedRateValue));
+      const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
+      
+      try { 
+        // 応答なし送信（WithoutResponse）でパケットを最速処理
+        await bleChar.writeValueWithoutResponse(new Uint8Array([UFO_ID, 0x01, byte2])); 
+      }
+      catch(e) { 
+        console.warn('BLE送信エラー:', e); 
       } finally {
-        isBleBusy = false;
+        isBleBusy = false; // 成功・失敗に関わらず必ずロックを解除
       }
     }
 
-    // ─── startConnect（「UFO SA に接続する」ボタンを押した時の処理） ───
+    // ─── 修正版 startConnect ───
     async function startConnect() {
       const btn = document.getElementById('connectBtn');
       const err = document.getElementById('connectError');
       const scr = document.getElementById('connect-screen');
-      btn.disabled = true;
-      btn.textContent = 'Intiface に接続中…';
-      err.textContent = '';
+      btn.disabled = true; btn.textContent = '接続中…'; err.textContent = '';
       scr.classList.add('connecting');
-
       try {
-        // 1. Intiface Central のローカルサーバーへWebSocket接続
-        bpClient = new Buttplug.ButtplugClient('BLE Player');
-        const connector = new Buttplug.ButtplugBrowserWebsocketClientConnector('ws://localhost:12345');
+        // ポップアップを出す処理（ここが一番最初に最優先で実行される必要があります）
+        bleDevice = await navigator.bluetooth.requestDevice({ filters:[{name:'UFOSA'}], optionalServices:[UFO_SERVICE] });
+        
+        bleServer = await bleDevice.gatt.connect(); 
+        const service = await bleServer.getPrimaryService(UFO_SERVICE);
+        bleChar = await service.getCharacteristic(UFO_CHAR);
+        
+        // ★ 接続がすべて成功したあとに、対策Bのタイマーを起動する
+        startWindowsKeepAlive();
 
-        // デバイスが見つかった時のイベント
-        bpClient.addListener('deviceadded', (device) => {
-          console.log('Intiface経由でデバイス接続:', device.name);
-          bpDevice = device;
-          document.getElementById('bleDot').classList.remove('disconnected');
-          document.getElementById('bleLabel').textContent = device.name + ' (Intiface接続済)';
-          enterMain(device.name);
-        });
-
-        // デバイスの電源が切れた時のイベント
-        bpClient.addListener('deviceremoved', (device) => {
-          console.warn('デバイス切断:', device.name);
-          bpDevice = null;
-          document.getElementById('bleDot').classList.add('disconnected');
-          document.getElementById('bleLabel').textContent = 'デバイス待機中…';
-        });
-
-        // Intiface Central 自体が終了した時のイベント
-        bpClient.addListener('disconnect', () => {
-          bpDevice = null;
-          document.getElementById('bleDot').classList.add('disconnected');
-          document.getElementById('bleLabel').textContent = 'Intiface 未接続';
-        });
-
-        await bpClient.connect(connector);
-
-        // 2. すでに Intiface 側に接続済みのデバイスがあれば即座に取得
-        if (bpClient.devices.length > 0) {
-          bpDevice = bpClient.devices[0];
-          enterMain(bpDevice.name);
-          return;
-        }
-
-        // 3. まだ繋がっていなければスキャンを開始してU.F.O. SAを探す
-        btn.textContent = 'UFO SA をスキャン中…';
-        await bpClient.startScanning();
-
-      } catch (e) {
+        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+        enterMain(bleDevice.name || 'UFO SA');
+      } catch(e) {
         scr.classList.remove('connecting');
-        btn.disabled = false;
-        btn.textContent = 'UFO SA に接続する';
-        err.textContent = 'Intiface Central が起動しているか確認してください (' + e.message + ')';
+        btn.disabled = false; btn.textContent = 'UFO SA に接続する';
+        if (e.name !== 'NotFoundError') err.textContent = 'エラー: ' + e.message;
       }
     }
 
-    // ─── enterMain ───
+       // ─── 対策C：Windowsの省電力タイマーを完全に黙らせる5秒間隔の超高頻度ハートビート ───
+    function startWindowsKeepAlive() {
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
+      
+      keepAliveTimer = setInterval(async () => {
+        if (!bleChar) return;
+        
+        // 通常の送信（isBleBusy）が行われている間は、今回の維持パケットをスキップして衝突を防ぐ
+        if (isBleBusy) return; 
+        
+        isBleBusy = true; // ロック
+        try {
+          // 【超強力刺激1】UFOSAが誤動作しない「速度0、方向0」の無害なコマンドを5秒に1回強制的にWrite送信
+          // ※UFOSAのプロトコル上、[UFO_ID, 0x01, 0x00]（停止コマンド）を上書き送信します
+          const dummyCommand = new Uint8Array([UFO_ID, 0x01, 0x00]);
+          await bleChar.writeValueWithoutResponse(dummyCommand);
+          
+          // 【超強力刺激2】間髪入れずにReadも実行し、OSに「双方向で活発に通信中」と誤認させる
+          await bleChar.readValue(); 
+          
+          console.log('Windows生存ハートビート（Write&Read）送信成功');
+        } catch(e) {
+          // 片方が非対応でエラーになっても、Windowsの通信スタック（ドライバ層）は確実に叩かれます
+          console.log('Windows生存ハートビート実行（エラー無視で継続）');
+        } finally {
+          isBleBusy = false; // ロック解除
+        }
+      }, 5000); // ★100秒ではなく「5秒（5000ms）」に1回実行します
+    }
+
+    
+     // ─── 修正版 enterMain（セキュリティエラーによるプログラム停止を回避） ───
     function enterMain(deviceName) {
       document.getElementById('connect-screen').classList.add('hidden');
       if (deviceName) {
@@ -471,44 +475,60 @@
       } else {
         document.getElementById('bleLabel').textContent = '未接続（テスト）';
       }
-    }
-
-    async function onDisconnected() {
-      if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
-      if (proactiveRefreshTimer) { clearTimeout(proactiveRefreshTimer); proactiveRefreshTimer = null; }
-      bleChar = null;
-      bleReadChar1 = null;
-      bleReadChar2 = null;
       
-      if (!bleDevice || isAutoReconnecting) return;
-
-      isAutoReconnecting = true;
-      document.getElementById('bleDot').classList.add('disconnected');
-      document.getElementById('bleLabel').textContent = '自動再接続中…';
-
-      let attempt = 0;
-      while (isAutoReconnecting) {
-        attempt++;
-        try {
-          const waitTime = (attempt === 1) ? 300 : 800;
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-
-          await connectGattSession();
-
-          document.getElementById('bleDot').classList.remove('disconnected');
-          document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 接続済';
-          console.log('自動再接続完了（試行 ' + attempt + '回目）');
-          
-          isAutoReconnecting = false;
-          return;
-        } catch (err) {
-          console.warn('自動再接続リトライ中 (' + attempt + '回目):', err.message);
-          document.getElementById('bleLabel').textContent = '自動再接続中… (' + attempt + ')';
+      // try-catchで囲むことで、フォルダ選択ダイアログがセキュリティ制限で弾かれても
+      // プログラム全体がクラッシュしてBLE通信に悪影響を及ぼすのを防ぎます
+      try {
+        if (!isTouchDevice()) {
+          document.getElementById('addFolderBtn').click();
         }
+      } catch (folderError) {
+        console.warn('自動フォルダ選択はブラウザにブロックされました（手動で選択してください）:', folderError);
       }
     }
 
- 
+    // ─── 修正版 onDisconnected（切断されたら0.1秒で自動復帰する） ───
+    async function onDisconnected() {
+      if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
+      bleChar = null;
+      
+      // もし意図しない切断（150秒の壁）であれば、ダイアログを出さずに自動再接続を試みる
+      if (bleDevice && !isAutoReconnecting) {
+        isAutoReconnecting = true;
+        document.getElementById('bleLabel').textContent = '自動再接続中…';
+        console.log('Windows対策: 150秒の切断を検知。自動高速再接続を開始します。');
+        
+        try {
+          // ユーザーのポップアップなしで、前回のデバイスインスタンスからGATTを再接続
+          bleServer = await bleDevice.gatt.connect(); 
+          const service = await bleServer.getPrimaryService(UFO_SERVICE);
+          bleChar = await service.getCharacteristic(UFO_CHAR);
+          
+          // 再度タイマーを起動
+          startWindowsKeepAlive();
+          
+          document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 復帰済';
+          console.log('Windows対策: 自動高速再接続に成功しました！');
+          isAutoReconnecting = false;
+          return; // 通常の切断処理（confirm）へ行かずに終了
+        } catch(reconnectError) {
+          console.error('自動再接続に失敗しました。通常の手動再接続へ移行します:', reconnectError);
+          isAutoReconnecting = false;
+        }
+      }
+
+      // 自動再接続も失敗した場合のみ、従来の確認ダイアログを出す
+      document.getElementById('bleDot').classList.add('disconnected');
+      document.getElementById('bleLabel').textContent = '切断されました';
+      
+      if (confirm('UFO SA との接続が切れました。再接続しますか？')) {
+        const scr = document.getElementById('connect-screen');
+        scr.classList.remove('hidden','connecting');
+        document.getElementById('connectBtn').disabled = false;
+        document.getElementById('connectBtn').textContent = 'UFO SA に接続する';
+        document.getElementById('connectError').textContent = '';
+      }
+    }
 
     // ══════════════════════════════
     //  ライブラリ
@@ -537,7 +557,6 @@
       };
       reader.readAsText(file); event.target.value = '';
     }
-
 
     // ══════════════════════════════
     //  ファイル管理
