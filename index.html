@@ -1182,7 +1182,7 @@
       document.getElementById('timedur').textContent     = formatTime(dur);
       document.getElementById('seekbarFill').style.width = (dur?cur/dur*100:0)+'%';
       document.getElementById('tlPlayhead').style.left   = (dur?cur/dur*100:0)+'%';
-      processBLESchedule(cur*10);
+      processBLESchedule(cur*1000); // time_ms はミリ秒
     });
 
     player.addEventListener('ended', () => {
@@ -1325,13 +1325,13 @@
       [...track.querySelectorAll('.tl-marker')].forEach(m=>m.remove());
       const dur=player.duration||0, h=track.clientHeight-6;
       schedule.forEach(row => {
-        const pct = dur?(row.time_ms/10/dur*100):0;
+        const pct = dur?(row.time_ms/1000/dur*100):0;
         const m = document.createElement('div');
         m.className = 'tl-marker dir'+row.direction;
         m.style.left   = pct+'%';
         m.style.height = Math.max(3,Math.round(row.strength/100*h))+'px';
-        m.title = '向き:'+row.direction+' 強さ:'+row.strength;
-        m.addEventListener('click', () => { player.currentTime=row.time_ms/10; });
+        m.title = '向き:'+row.direction+' 強さ:'+row.strength+' '+formatTime(row.time_ms/1000);
+        m.addEventListener('click', () => { player.currentTime=row.time_ms/1000; });
         track.appendChild(m);
       });
       const marks=document.querySelectorAll('.tl-time-mark'), count=marks.length-1;
