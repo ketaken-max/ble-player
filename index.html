@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>BLE Player</title>
+    <script src="https://jsdelivr.net"></script>
+
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
   <style>
     :root {
@@ -372,97 +374,94 @@
 
   <script>
     // ══════════════════════════════
-    //  BLE
+    //  Intiface Central (Buttplug.js) 接続・制御
     // ══════════════════════════════
-    const UFO_SERVICE = '40ee1111-63ec-4b7f-8ce7-712efd55b90e';
-    const UFO_CHAR    = '40ee2222-63ec-4b7f-8ce7-712efd55b90e';
-    const UFO_READ1   = '40ee3333-63ec-4b7f-8ce7-712efd55b90e';
-    const UFO_READ2   = '40ee4444-63ec-4b7f-8ce7-712efd55b90e';
-    const UFO_ID      = 0x02;
+    let bpClient = null;
+    let bpDevice = null;
+    let speedRateValue = 0.5;
+    let isBleBusy = false;
 
-    let bleDevice = null, bleServer = null, bleChar = null, speedRateValue = 0.5;
-    let bleReadChar1 = null, bleReadChar2 = null;
-    let keepAliveTimer = null;
-    let proactiveRefreshTimer = null;
-    let isBleBusy = false; 
-    let isAutoReconnecting = false;
-
+    // ─── sendCommand（既存の呼び出し方と完全互換） ───
     async function sendCommand(direction, strength) {
-      if (!bleChar || isBleBusy) return;
-      
+      if (!bpDevice || isBleBusy) return;
+
       isBleBusy = true;
-      const spd   = Math.min(100, Math.floor(strength * speedRateValue));
-      const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
-      
-      try { 
-        await bleChar.writeValueWithoutResponse(new Uint8Array([UFO_ID, 0x01, byte2])); 
-      } catch(e) { 
-        console.warn('BLE送信エラー:', e); 
+      // 0〜100の強度 × speedRateValue を、Buttplug用の 0.0 〜 1.0 の小数に変換
+      const spd = Math.min(100, Math.floor(strength * speedRateValue));
+      const normalizedSpeed = spd / 100.0;
+      const clockwise = (direction === 1);
+
+      try {
+        // U.F.O. SA に回転命令を送信（速度 0.0 〜 1.0、回転方向 true / false）
+        await bpDevice.rotate(normalizedSpeed, clockwise);
+      } catch (e) {
+        console.warn('Intiface送信エラー:', e);
       } finally {
         isBleBusy = false;
       }
     }
 
-    async function connectGattSession() {
-      bleServer = await bleDevice.gatt.connect(); 
-      const service = await bleServer.getPrimaryService(UFO_SERVICE);
-      
-      bleChar      = await service.getCharacteristic(UFO_CHAR);
-      bleReadChar1 = await service.getCharacteristic(UFO_READ1);
-      bleReadChar2 = await service.getCharacteristic(UFO_READ2);
-
-      startWindowsKeepAlive();
-
-      if (proactiveRefreshTimer) clearTimeout(proactiveRefreshTimer);
-      proactiveRefreshTimer = setTimeout(() => {
-        if (bleDevice && bleDevice.gatt.connected && !isAutoReconnecting) {
-          console.log('140秒経過：セッションを高速リフレッシュします');
-          bleDevice.gatt.disconnect();
-        }
-      }, 140000);
-    }
-
+    // ─── startConnect（「UFO SA に接続する」ボタンを押した時の処理） ───
     async function startConnect() {
       const btn = document.getElementById('connectBtn');
       const err = document.getElementById('connectError');
       const scr = document.getElementById('connect-screen');
-      btn.disabled = true; btn.textContent = '接続中…'; err.textContent = '';
+      btn.disabled = true;
+      btn.textContent = 'Intiface に接続中…';
+      err.textContent = '';
       scr.classList.add('connecting');
-      try {
-        bleDevice = await navigator.bluetooth.requestDevice({ 
-          filters: [{ name: 'UFOSA' }], 
-          optionalServices: [UFO_SERVICE] 
-        });
-        
-        bleDevice.removeEventListener('gattserverdisconnected', onDisconnected);
-        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
 
-        await connectGattSession();
-        enterMain(bleDevice.name || 'UFO SA');
-      } catch(e) {
+      try {
+        // 1. Intiface Central のローカルサーバーへWebSocket接続
+        bpClient = new Buttplug.ButtplugClient('BLE Player');
+        const connector = new Buttplug.ButtplugBrowserWebsocketClientConnector('ws://127.0.0.1:12345');
+
+        // デバイスが見つかった時のイベント
+        bpClient.addListener('deviceadded', (device) => {
+          console.log('Intiface経由でデバイス接続:', device.name);
+          bpDevice = device;
+          document.getElementById('bleDot').classList.remove('disconnected');
+          document.getElementById('bleLabel').textContent = device.name + ' (Intiface接続済)';
+          enterMain(device.name);
+        });
+
+        // デバイスの電源が切れた時のイベント
+        bpClient.addListener('deviceremoved', (device) => {
+          console.warn('デバイス切断:', device.name);
+          bpDevice = null;
+          document.getElementById('bleDot').classList.add('disconnected');
+          document.getElementById('bleLabel').textContent = 'デバイス待機中…';
+        });
+
+        // Intiface Central 自体が終了した時のイベント
+        bpClient.addListener('disconnect', () => {
+          bpDevice = null;
+          document.getElementById('bleDot').classList.add('disconnected');
+          document.getElementById('bleLabel').textContent = 'Intiface 未接続';
+        });
+
+        await bpClient.connect(connector);
+
+        // 2. すでに Intiface 側に接続済みのデバイスがあれば即座に取得
+        if (bpClient.devices.length > 0) {
+          bpDevice = bpClient.devices[0];
+          enterMain(bpDevice.name);
+          return;
+        }
+
+        // 3. まだ繋がっていなければスキャンを開始してU.F.O. SAを探す
+        btn.textContent = 'UFO SA をスキャン中…';
+        await bpClient.startScanning();
+
+      } catch (e) {
         scr.classList.remove('connecting');
-        btn.disabled = false; btn.textContent = 'UFO SA に接続する';
-        if (e.name !== 'NotFoundError') err.textContent = 'エラー: ' + e.message;
+        btn.disabled = false;
+        btn.textContent = 'UFO SA に接続する';
+        err.textContent = 'Intiface Central が起動しているか確認してください (' + e.message + ')';
       }
     }
 
-    function startWindowsKeepAlive() {
-      if (keepAliveTimer) clearInterval(keepAliveTimer);
-      
-      keepAliveTimer = setInterval(async () => {
-        if (!bleReadChar1 || !bleReadChar2 || isBleBusy) return;
-        
-        isBleBusy = true;
-        try {
-          await bleReadChar1.readValue();
-          await bleReadChar2.readValue();
-        } catch(e) {
-        } finally {
-          isBleBusy = false;
-        }
-      }, 20000);
-    }
-
+    // ─── enterMain ───
     function enterMain(deviceName) {
       document.getElementById('connect-screen').classList.add('hidden');
       if (deviceName) {
