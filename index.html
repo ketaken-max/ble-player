@@ -417,16 +417,7 @@ async function connectGattSession() {
   // 1. Read専用キャラクタリスティックによるセッション維持を開始
   startWindowsKeepAlive();
 
-  // 2. 【保険】もしRead維持でもWindowsが150秒で切る場合、140秒時点で先回り再接続してフリーズを防ぐ
-  // ※まずはRead維持の効果を確かめるため、このブロックをコメントアウトして150秒超えるかテストしてもOKです
-  if (proactiveRefreshTimer) clearTimeout(proactiveRefreshTimer);
-  proactiveRefreshTimer = setTimeout(() => {
-    if (bleDevice && bleDevice.gatt.connected && !isAutoReconnecting) {
-      console.log('140秒経過：OSの強制切断前にセッションを高速リフレッシュします');
-      bleDevice.gatt.disconnect(); // 直後にonDisconnectedが走り0.1秒で再接続される
-    }
-  }, 140000);
-}
+
 
 // ─── startConnect（初回接続） ───
 async function startConnect() {
