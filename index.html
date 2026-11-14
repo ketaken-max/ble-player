@@ -281,6 +281,9 @@
     <div class="ble-status">
       <div class="dot disconnected" id="bleDot"></div>
       <span id="bleLabel">未接続</span>
+      <!-- 接続が切れているときだけ表示される（編集画面から戻ったときなど） -->
+      <button class="btn-outline" id="reconnectBtn" style="display:none;">UFO SA を再接続</button>
+      <button class="btn-outline" id="restoreFolderBtn" style="display:none;">フォルダを読み込む</button>
     </div>
   </div>
 
@@ -416,7 +419,8 @@
     function sendStop() { pendingCommand = encodeCommand(0, 0); return flushPendingCommand(); }
 
     // ─── 修正版 startConnect ───    // ─── 修正版 startConnect ───
-    async function startConnect() {
+    // autoPickFolder=false のとき（メイン画面からの再接続）はフォルダ選択を開かない
+    async function startConnect(autoPickFolder = true) {
       const btn = document.getElementById('connectBtn');
       const err = document.getElementById('connectError');
       const scr = document.getElementById('connect-screen');
@@ -436,7 +440,7 @@
         // 再接続ごとに同じ device へ再購読すると onDisconnected が二重に走るため、先に外す
         bleDevice.removeEventListener('gattserverdisconnected', onDisconnected);
         bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
-        enterMain(bleDevice.name || 'UFO SA');
+        enterMain(bleDevice.name || 'UFO SA', autoPickFolder);
       } catch(e) {
         scr.classList.remove('connecting');
         btn.disabled = false; btn.textContent = 'UFO SA に接続する';
@@ -471,19 +475,34 @@
     }
 
         // ─── 修正版 enterMain     // ─── 修正版 enterMain（セキュリティエラーによるプログラム停止を回避） ───
-    function enterMain(deviceName) {
+    // 接続が切れている状態を知らせ、ワンクリックで再接続できるボタンを出す。
+    // device chooser はユーザー操作が必要なので、自動では出せない（編集画面から戻ったときなど用）。
+    function showDisconnected(label) {
+      document.getElementById('bleDot').classList.add('disconnected');
+      document.getElementById('bleLabel').textContent = label;
+      document.getElementById('reconnectBtn').style.display = '';
+    }
+    function hideDisconnected() {
+      document.getElementById('bleDot').classList.remove('disconnected');
+      document.getElementById('reconnectBtn').style.display = 'none';
+      document.getElementById('restoreFolderBtn').style.display = 'none';
+    }
+    document.getElementById('reconnectBtn').addEventListener('click', () => startConnect(false));
+
+    function enterMain(deviceName, autoPickFolder = true) {
       document.getElementById('connect-screen').classList.add('hidden');
       if (deviceName) {
+        hideDisconnected();
         document.getElementById('bleLabel').textContent = deviceName + ' 接続済';
-        document.getElementById('bleDot').classList.remove('disconnected');
       } else {
         document.getElementById('bleLabel').textContent = '未接続（テスト）';
+        document.getElementById('reconnectBtn').style.display = 'none';
       }
       
       // try-catchで囲むことで、フォルダ選択ダイアログがセキュリティ制限で弾かれても
       // プログラム全体がクラッシュしてBLE通信に悪影響を及ぼすのを防ぎます
       try {
-        if (supportsFileSystemAccess) {
+        if (autoPickFolder && supportsFileSystemAccess) {
           document.getElementById('addFolderBtn').click();
         }
       } catch (folderError) {
@@ -500,6 +519,7 @@
       if (bleDevice && !isAutoReconnecting) {
         isAutoReconnecting = true;
         document.getElementById('bleLabel').textContent = '自動再接続中…';
+        document.getElementById('reconnectBtn').style.display = 'none';
         console.log('Windows対策: 150秒の切断を検知。自動高速再接続を開始します。');
         
         try {
@@ -517,6 +537,7 @@
           }
           
           document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 復帰済';
+          document.getElementById('bleDot').classList.remove('disconnected');
           console.log('Windows対策: 自動高速再接続に成功しました！');
           isAutoReconnecting = false;
           return; // 通常の切断処理（confirm）へ行かずに終了
@@ -526,11 +547,11 @@
         }
       }
 
-      // 自動再接続も失敗した場合のみ、従来の確認ダイアログを出す
-      document.getElementById('bleDot').classList.add('disconnected');
-      document.getElementById('bleLabel').textContent = '切断されました';
+      // 自動再接続も失敗した場合のみ、従来の確認ダイアログを出す。
+      // ダイアログで「キャンセル」を選んでも、トップバーの「UFO SA を再接続」から復旧できる。
+      showDisconnected('切断されました — 「UFO SA を再接続」で復旧できます');
       
-      if (confirm('UFO SA との接続が切れました。再接続しますか？')) {
+      if (confirm('UFO SA との接続が切れました。再接続しますか？\n（「キャンセル」でも、上部の「UFO SA を再接続」ボタンから再接続できます）')) {
         const scr = document.getElementById('connect-screen');
         scr.classList.remove('hidden','connecting');
         document.getElementById('connectBtn').disabled = false;
@@ -1857,6 +1878,14 @@
         await saveFileToIDB('editor-csv-handle', null).catch(()=>{});
       }
 
+      // 作品フォルダのハンドルも保存する（メイン画面に戻ったときにフォルダを読み直すため）
+      const work = currentWorkId ? library[currentWorkId] : null;
+      const workDir = work ? dirHandles[work.folderName] : null;
+      if (workDir) {
+        try { await saveFileToIDB('work-dir', workDir); }
+        catch(e) { console.warn('作品フォルダのハンドル保存に失敗（復元は手動選択になります）:', e); }
+      }
+
       window.location.href = 'editor.html';
     }
 
@@ -1879,6 +1908,75 @@
         tx.onerror    = reject;
       });
     }
+
+    async function loadFileFromIDB(key) {
+      const db = await openIDB();
+      return new Promise((resolve, reject) => {
+        const tx  = db.transaction('files', 'readonly');
+        const req = tx.objectStore('files').get(key);
+        req.onsuccess = () => resolve(req.result ?? null);
+        req.onerror   = () => reject(req.error);
+      });
+    }
+
+    // ══════════════════════════════
+    //  編集画面から戻ったときの復元
+    //  ページ遷移でGATT接続は切れる。作品とトラックの選択は引き継ぎ、
+    //  フォルダは保存しておいたハンドルから読み直す（許可が続いている場合のみ）。
+    //  機器の再接続はユーザー操作が必要なので、トップバーのボタンで行う。
+    // ══════════════════════════════
+    let pendingEditorTrack = null;
+
+    async function restoreAfterEditorReturn() {
+      const workId = window._editorReturnWork;
+      pendingEditorTrack = window._editorReturnTrack || null;
+      if (!workId || !library[workId]) {
+        if (supportsFileSystemAccess) document.getElementById('restoreFolderBtn').style.display = '';
+        return;
+      }
+      selectWork(workId);   // 作品とトラック一覧を選ぶ（未読込のトラックは「未読込」で並ぶ）
+
+      const dirHandle = await loadFileFromIDB('work-dir').catch(() => null);
+      if (dirHandle) {
+        try {
+          const perm = await dirHandle.queryPermission({ mode: 'readwrite' });
+          if (perm === 'granted') {
+            await scanDirHandle(dirHandle, dirHandle.name, null);
+            applyAllCsvEdits();    // スキャンでディスクのCSVが読まれた後に編集内容を上書きし直す
+            refreshCsvBadges();   // トラック一覧のCSV表示はスキャン前作られていないので作り直す
+            restorePendingTrack();
+            return;
+          }
+        } catch(e) { console.warn('保存したフォルダの読み直しに失敗:', e); }
+      }
+      // 許可が続いていない（またはハンドルが無い）場合は、ワンクリックでフォルダを選ぶ
+      if (supportsFileSystemAccess) document.getElementById('restoreFolderBtn').style.display = '';
+    }
+
+    function restorePendingTrack() {
+      const base = pendingEditorTrack;
+      pendingEditorTrack = null;
+      if (base && mediaFiles[base]) loadTrack(base);
+    }
+
+    // 許可が切れていたときの復元（クリック＝ユーザー操作なのでフォルダ選択とpermissionが使える）
+    async function pickFolderForRestore() {
+      const btn = document.getElementById('restoreFolderBtn');
+      btn.disabled = true; btn.textContent = '読み込み中…';
+      try {
+        const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        await scanDirHandle(dirHandle, dirHandle.name, null);
+        applyAllCsvEdits();
+        refreshCsvBadges();
+        restorePendingTrack();
+        document.getElementById('restoreFolderBtn').style.display = 'none';
+      } catch(e) {
+        if (e && e.name !== 'AbortError') alert('フォルダの読み込みに失敗しました: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = 'フォルダを読み込む';
+      }
+    }
+    document.getElementById('restoreFolderBtn').addEventListener('click', pickFolderForRestore);
 
     // ══════════════════════════════
     //  UI
@@ -1928,15 +2026,22 @@
     // ══════════════════════════════
     //  初期化
     // ══════════════════════════════
-    // 編集画面から戻ってきた場合は接続画面をスキップ
-    if (sessionStorage.getItem('editor-work-id')) {
+    // 編集画面から戻ってきた場合は接続画面をスキップし、機器が切れていることを明示する
+    // （ページを移動するとGATT接続も切れる。再接続にはユーザー操作が必要なのでボタンで行う）
+    const returningFromEditor = !!sessionStorage.getItem('editor-work-id');
+    if (returningFromEditor) {
+      window._editorReturnWork  = sessionStorage.getItem('editor-work-id');
+      window._editorReturnTrack = sessionStorage.getItem('editor-track') || '';
       sessionStorage.removeItem('editor-work-id');
+      sessionStorage.removeItem('editor-track');
       document.getElementById('connect-screen').classList.add('hidden');
+      showDisconnected('編集画面から戻りました — 機器は切断中です');
     }
     loadLibraryFromStorage();
     restoreUIPreferences();
     applyAllCsvEdits();
     renderLibrarySidebar();
+    if (returningFromEditor) restoreAfterEditorReturn().catch(e => console.warn('編集画面からの復元に失敗しました:', e));
   </script>
 </body>
 </html>
