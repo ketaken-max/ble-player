@@ -719,10 +719,15 @@
 
     async function processFolderFiles(folderName, files, parentFolderName=null) {
       const folderMedia = {}, folderCsv = {};
+      const sameFolderDup = [];
       files.forEach(file => {
         const ext  = file.name.split('.').pop().toLowerCase();
         const base = file.name.replace(/\.[^.]+$/, '');
-        if (['mp4','mp3','wav','ogg','m4a','webm'].includes(ext)) folderMedia[base] = file;
+        if (['mp4','mp3','wav','ogg','m4a','webm'].includes(ext)) {
+          // 同じフォルダ内で base 名が重複している（拡張子が違う）場合は後勝ちになる
+          if (folderMedia[base]) sameFolderDup.push(`${folderMedia[base].name} と ${file.name}`);
+          folderMedia[base] = file;
+        }
         else if (ext === 'csv') folderCsv[base] = file;
       });
       if (!Object.keys(folderMedia).length && !Object.keys(folderCsv).length) return;
@@ -730,6 +735,7 @@
       const mediaBases = Object.keys(folderMedia).sort(naturalCompare);
       const csvBases   = Object.keys(folderCsv).sort(naturalCompare);
       const folderPath = (parentFolderName ? parentFolderName + '/' : '') + folderName;
+      sameFolderDup.forEach(d => collisionPairs.add(`${folderPath} で同じ名前の拡張子が違うファイル: ${d}`));
 
       // 1) 同名のCSVを最優先で割り当てる
       const csvMapping = {};
@@ -755,6 +761,10 @@
           csvFiles[mb] = folderCsv[csvBase];
           // File System Access APIのハンドルをキャッシュ
           if (folderCsv[csvBase]?._handle) csvHandles[mb] = folderCsv[csvBase]._handle;
+        } else {
+          // 同じ base 名が別のフォルダで先に読まれたとき、前のフォルダのCSVを残さない
+          // （残ると、このフォルダにCSVが無いトラックへ前のフォルダのCSVがそのまま当たってしまう）
+          delete csvFiles[mb]; delete csvHandles[mb];
         }
       });
 
@@ -1523,7 +1533,8 @@
         const newFile = await newFileHandle.getFile();
         newFile._handle = newFileHandle;
         mediaFiles[newName] = newFile;
-        delete mediaFiles[base];
+        mediaOrigin[newName] = mediaOrigin[base];
+        delete mediaFiles[base]; delete mediaOrigin[base];
         if (csvFiles[base])  { csvFiles[newName]  = csvFiles[base];  delete csvFiles[base]; }
         if (csvHandles[base]){ csvHandles[newName] = csvHandles[base]; delete csvHandles[base]; }
 
@@ -1547,7 +1558,8 @@
           await parentHandle.removeEntry(csvFiles[base].name).catch(()=>{});
         }
 
-        delete mediaFiles[base]; delete csvFiles[base]; delete csvHandles[base];
+        delete mediaFiles[base]; delete mediaOrigin[base];
+        delete csvFiles[base]; delete csvHandles[base];
         removeTrackFromWork(workId, base);
         saveLibraryToStorage();
         renderLibrarySidebar();
