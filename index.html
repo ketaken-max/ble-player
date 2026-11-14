@@ -1942,6 +1942,7 @@
           const perm = await dirHandle.queryPermission({ mode: 'readwrite' });
           if (perm === 'granted') {
             await scanDirHandle(dirHandle, dirHandle.name, null);
+            rootDirHandle = dirHandle;   // 「＋フォルダを追加」と同じ状態にして、フォルダのリネーム・削除を使えるようにする
             applyAllCsvEdits();    // スキャンでディスクのCSVが読まれた後に編集内容を上書きし直す
             refreshCsvBadges();   // トラック一覧のCSV表示はスキャン前作られていないので作り直す
             restorePendingTrack();
@@ -1966,6 +1967,7 @@
       try {
         const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
         await scanDirHandle(dirHandle, dirHandle.name, null);
+        rootDirHandle = dirHandle;   // 「＋フォルダを追加」と同じ状態にする（フォルダのリネーム・削除用）
         applyAllCsvEdits();
         refreshCsvBadges();
         restorePendingTrack();
