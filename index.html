@@ -444,7 +444,15 @@
       } catch(e) {
         scr.classList.remove('connecting');
         btn.disabled = false; btn.textContent = 'UFO SA に接続する';
-        if (e.name !== 'NotFoundError') err.textContent = 'エラー: ' + e.message;
+        if (e.name !== 'NotFoundError') {
+          // メイン画面表示中（編集画面から戻った後など）は接続画面に書けないので、トップバーに出す
+          if (scr.classList.contains('hidden')) {
+            document.getElementById('bleLabel').textContent = '接続に失敗: ' + e.message;
+            document.getElementById('reconnectBtn').style.display = '';
+          } else {
+            err.textContent = 'エラー: ' + e.message;
+          }
+        }
       }
     }
 
@@ -485,7 +493,8 @@
     function hideDisconnected() {
       document.getElementById('bleDot').classList.remove('disconnected');
       document.getElementById('reconnectBtn').style.display = 'none';
-      document.getElementById('restoreFolderBtn').style.display = 'none';
+      // 「フォルダを読み込む」は这里で消さない：先に再接続だけしたときにも
+      // フォルダの再読み込みが必要なので、消すのは読み込み成功時だけ。
     }
     document.getElementById('reconnectBtn').addEventListener('click', () => startConnect(false));
 
@@ -1878,12 +1887,17 @@
         await saveFileToIDB('editor-csv-handle', null).catch(()=>{});
       }
 
-      // 作品フォルダのハンドルも保存する（メイン画面に戻ったときにフォルダを読み直すため）
+      // 作品フォルダのハンドルも保存する（メイン画面に戻ったときにフォルダを読み直すため）。
+      // どの作品のものかも一緒に持たせる。別作品のハンドルが残っていると、戻ったときに
+      // 違うフォルダを読み直して作品を増やしてしまう。
       const work = currentWorkId ? library[currentWorkId] : null;
       const workDir = work ? dirHandles[work.folderName] : null;
       if (workDir) {
-        try { await saveFileToIDB('work-dir', workDir); }
+        try { await saveFileToIDB('work-dir', { workId: currentWorkId, dirHandle: workDir }); }
         catch(e) { console.warn('作品フォルダのハンドル保存に失敗（復元は手動選択になります）:', e); }
+      } else {
+        try { await saveFileToIDB('work-dir', null); }
+        catch(e) { /* 消せなくても復元は手動選択になるだけ */ }
       }
 
       window.location.href = 'editor.html';
@@ -1926,38 +1940,63 @@
     //  機器の再接続はユーザー操作が必要なので、トップバーのボタンで行う。
     // ══════════════════════════════
     let pendingEditorTrack = null;
+    let pendingEditorWorkId = null;
+    let restoreHandle = null;   // 保存しておいた作品フォルダのハンドル（クリック時に許可を取り直せる）
+
+    // IndexedDB に保存した 'work-dir' から {workId, dirHandle} を取り出す。
+    // ハンドルそのものだけ保存していた古いバージョンでも読めるようにしておく。
+    function readWorkDirRecord(rec) {
+      if (!rec) return null;
+      if (rec.kind === 'directory') return { workId: null, dirHandle: rec };
+      if (rec.dirHandle && rec.dirHandle.kind === 'directory') return { workId: rec.workId || null, dirHandle: rec.dirHandle };
+      return null;
+    }
 
     async function restoreAfterEditorReturn() {
       const workId = window._editorReturnWork;
-      pendingEditorTrack = window._editorReturnTrack || null;
-      if (!workId || !library[workId]) {
+      pendingEditorTrack  = window._editorReturnTrack || null;
+      pendingEditorWorkId = workId || null;
+      const showFolderBtn = () => {
         if (supportsFileSystemAccess) document.getElementById('restoreFolderBtn').style.display = '';
-        return;
-      }
+        else pendingEditorTrack = null;   // Android はフォルダを自分で選び直すので、待ち状態を作らない
+      };
+      if (!workId || !library[workId]) { showFolderBtn(); return; }
       selectWork(workId);   // 作品とトラック一覧を選ぶ（未読込のトラックは「未読込」で並ぶ）
 
-      const dirHandle = await loadFileFromIDB('work-dir').catch(() => null);
-      if (dirHandle) {
+      const rec = readWorkDirRecord(await loadFileFromIDB('work-dir').catch(() => null));
+      const folderName = library[workId].folderName;
+      // 別作品のハンドルが残っていることがあるので、その作品のものだと分かる場合だけ使う
+      if (rec && (rec.workId === workId || (!rec.workId && rec.dirHandle.name === folderName))) {
+        restoreHandle = rec.dirHandle;
         try {
-          const perm = await dirHandle.queryPermission({ mode: 'readwrite' });
-          if (perm === 'granted') {
-            await scanDirHandle(dirHandle, dirHandle.name, null);
-            rootDirHandle = dirHandle;   // 「＋フォルダを追加」と同じ状態にして、フォルダのリネーム・削除を使えるようにする
-            applyAllCsvEdits();    // スキャンでディスクのCSVが読まれた後に編集内容を上書きし直す
-            refreshCsvBadges();   // トラック一覧のCSV表示はスキャン前作られていないので作り直す
-            restorePendingTrack();
-            return;
-          }
+          const perm = await rec.dirHandle.queryPermission({ mode: 'readwrite' });
+          if (perm === 'granted') { await rescanRestoredFolder(rec.dirHandle); return; }
         } catch(e) { console.warn('保存したフォルダの読み直しに失敗:', e); }
       }
+      restoreHandle = null;
       // 許可が続いていない（またはハンドルが無い）場合は、ワンクリックでフォルダを選ぶ
-      if (supportsFileSystemAccess) document.getElementById('restoreFolderBtn').style.display = '';
+      showFolderBtn();
+    }
+
+    // 作品フォルダを読み直し、トラック一覧・編集CSV・選んでいたトラックまで復元する
+    async function rescanRestoredFolder(dirHandle) {
+      await scanDirHandle(dirHandle, dirHandle.name, null);
+      rootDirHandle = dirHandle;   // 「＋フォルダを追加」と同じ状態にして、フォルダのリネーム・削除を使えるようにする
+      applyAllCsvEdits();          // スキャンでディスクのCSVが読まれた後に編集内容を上書きし直す
+      // トラック一覧はスキャン前に作っているので、読み込みが終わった時点で作り直す。
+      // 作り直さないと「未読込」表示のまま残り、読み終わったトラックを押しても
+      // 「まだ読み込まれていません」と誤って弾される。CSVバッジの表示も正しくなる。
+      if (pendingEditorWorkId && library[pendingEditorWorkId]) selectWork(pendingEditorWorkId);
+      restorePendingTrack();
     }
 
     function restorePendingTrack() {
       const base = pendingEditorTrack;
       pendingEditorTrack = null;
-      if (base && mediaFiles[base]) loadTrack(base);
+      if (!base) return;
+      // 読み直し中にユーザーが別作品を選んだ場合、このトラックはその作品のものではない
+      if (currentWorkId !== pendingEditorWorkId) { console.warn('別の作品を選んだので、編集していたトラックの復元はやめました'); return; }
+      if (mediaFiles[base]) loadTrack(base);
     }
 
     // 許可が切れていたときの復元（クリック＝ユーザー操作なのでフォルダ選択とpermissionが使える）
@@ -1965,12 +2004,15 @@
       const btn = document.getElementById('restoreFolderBtn');
       btn.disabled = true; btn.textContent = '読み込み中…';
       try {
-        const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-        await scanDirHandle(dirHandle, dirHandle.name, null);
-        rootDirHandle = dirHandle;   // 「＋フォルダを追加」と同じ状態にする（フォルダのリネーム・削除用）
-        applyAllCsvEdits();
-        refreshCsvBadges();
-        restorePendingTrack();
+        // 同じフォルダのハンドルが残っていれば、まずそこで許可を取り直す（選び直しは不要で失敗しにくい）
+        let dirHandle = null;
+        if (restoreHandle) {
+          try {
+            if (await restoreHandle.requestPermission({ mode: 'readwrite' }) === 'granted') dirHandle = restoreHandle;
+          } catch(e) { console.warn('保存していたフォルダの許可を取り直せませんでした:', e); }
+        }
+        if (!dirHandle) dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        await rescanRestoredFolder(dirHandle);
         document.getElementById('restoreFolderBtn').style.display = 'none';
       } catch(e) {
         if (e && e.name !== 'AbortError') alert('フォルダの読み込みに失敗しました: ' + e.message);
