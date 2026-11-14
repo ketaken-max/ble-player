@@ -77,6 +77,8 @@
     .tracks::-webkit-scrollbar-thumb:hover { background:var(--accent); }
     .track { flex-shrink:0; padding:7px 12px; border-radius:6px; border:1px solid var(--border); font-size:11px; cursor:pointer; transition:all .15s; display:flex; align-items:center; gap:8px; background:var(--bg3); }
     .track:hover { border-color:var(--accent); }
+    .track.unloaded { opacity:.45; cursor:not-allowed; }
+    .track.unloaded:hover { border-color:var(--border); }
     .track.active { border-color:var(--accent); background:rgba(124,106,255,.15); color:var(--accent); }
     .csv-badge { font-size:9px; font-family:'JetBrains Mono',monospace; padding:1px 5px; border-radius:3px; background:rgba(79,255,176,.15); color:var(--success); }
     .csv-badge.missing { background:rgba(255,183,77,.1); color:var(--warning); }
@@ -279,6 +281,9 @@
     <div class="ble-status">
       <div class="dot disconnected" id="bleDot"></div>
       <span id="bleLabel">未接続</span>
+      <!-- 接続が切れているときだけ表示される（編集画面から戻ったときなど） -->
+      <button class="btn-outline" id="reconnectBtn" style="display:none;">UFO SA を再接続</button>
+      <button class="btn-outline" id="restoreFolderBtn" style="display:none;">フォルダを読み込む</button>
     </div>
   </div>
 
@@ -342,13 +347,13 @@
             <div class="manual-slider-wrap">
               <span class="manual-slider-label">音量</span>
               <input type="range" class="manual-slider" id="volumeSlider" min="0" max="100" value="100"
-                oninput="player.volume=this.value/100; document.getElementById('volumeLabel').textContent=this.value+'%'">
+                oninput="setVolume(this.value)">
               <span class="manual-value" id="volumeLabel">100%</span>
             </div>
             <div class="manual-slider-wrap">
               <span class="manual-slider-label">速度倍率</span>
               <input type="range" class="manual-slider" id="speedRateSlider" min="0" max="100" value="50"
-                oninput="speedRateValue=this.value/100; document.getElementById('speedRateLabel').textContent=this.value+'%'">
+                oninput="setSpeedRate(this.value)">
               <span class="manual-value" id="speedRateLabel">50%</span>
             </div>
           </div>
@@ -378,38 +383,44 @@
     const UFO_CHAR    = '40ee2222-63ec-4b7f-8ce7-712efd55b90e';
     const UFO_ID      = 0x02;
     let bleDevice = null, bleServer = null, bleChar = null, speedRateValue = 0.5;
-    let keepAliveTimer = null; // ★ 対策B用のタイマー変数をここに追加
-    let isBleBusy = false; 
+    let keepAliveTimer = null;
+    let isBleBusy = false;
     let isAutoReconnecting = false;
-    
+    let pendingCommand = null;   // 直近1コマンドだけ保持する（古い命令を機器に送らないため）
+    let lastCommand    = null;   // 送信に成功した最後のコマンド（維持パケットに再利用）
+    let keepAliveWarned = false;
 
-    // ─── 修正版 sendCommand（非同期の重複を絶対に許さない構造） ───
-    async function sendCommand(direction, strength) {
-      if (!bleChar) return;
-      
-      // もし前回の通信（送信、または維持用の読込）がまだ終わっていれば、今回のコマンドは即座に破棄して詰まりを防ぐ
-      if (isBleBusy) {
-        // ログが溢れるのを防ぐため、console.warnは出さずにリターンします
-        return; 
-      }
-      
-      isBleBusy = true; // 通信開始（ロック）
-      const spd   = Math.min(100, Math.floor(strength * speedRateValue));
-      const byte2 = (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f);
-      
-      try { 
-        // 応答なし送信（WithoutResponse）でパケットを最速処理
-        await bleChar.writeValueWithoutResponse(new Uint8Array([UFO_ID, 0x01, byte2])); 
-      }
-      catch(e) { 
-        console.warn('BLE送信エラー:', e); 
-      } finally {
-        isBleBusy = false; // 成功・失敗に関わらず必ずロックを解除
-      }
+    // ─── コマンドのエンコード（方向 + 強さ×速度倍率） ───
+    function encodeCommand(direction, strength) {
+      const spd = Math.min(100, Math.max(0, Math.floor(strength * speedRateValue)));
+      return [UFO_ID, 0x01, (direction === 1 ? 0x80 : 0x00) | (spd & 0x7f)];
     }
 
-    // ─── 修正版 startConnect ───
-    async function startConnect() {
+    // ─── sendCommand（最新1つだけを送る。同時に複数通過しても積み上げない） ───
+    function sendCommand(direction, strength) {
+      pendingCommand = encodeCommand(direction, strength);
+      return flushPendingCommand();
+    }
+
+    // 送信できる状態なら直近コマンドを流す。送信を開始できたときだけ true を返す。
+    function flushPendingCommand() {
+      if (!bleChar || isBleBusy || !pendingCommand) return false;
+      const cmd = pendingCommand;
+      isBleBusy = true;
+      // 応答なし送信（WithoutResponse）でパケットを最速処理
+      bleChar.writeValueWithoutResponse(new Uint8Array(cmd))
+        .then(() => { pendingCommand = null; lastCommand = cmd; keepAliveWarned = false; })
+        .catch(e => console.warn('BLE送信エラー:', e))
+        .finally(() => { isBleBusy = false; });
+      return true;
+    }
+
+    // 何も指令していない状態での「停止」（再生停止・曲切り替え・終了時）
+    function sendStop() { pendingCommand = encodeCommand(0, 0); return flushPendingCommand(); }
+
+    // ─── 修正版 startConnect ───    // ─── 修正版 startConnect ───
+    // autoPickFolder=false のとき（メイン画面からの再接続）はフォルダ選択を開かない
+    async function startConnect(autoPickFolder = true) {
       const btn = document.getElementById('connectBtn');
       const err = document.getElementById('connectError');
       const scr = document.getElementById('connect-screen');
@@ -426,60 +437,91 @@
         // ★ 接続がすべて成功したあとに、対策Bのタイマーを起動する
         startWindowsKeepAlive();
 
+        // 再接続ごとに同じ device へ再購読すると onDisconnected が二重に走るため、先に外す
+        bleDevice.removeEventListener('gattserverdisconnected', onDisconnected);
         bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
-        enterMain(bleDevice.name || 'UFO SA');
+        enterMain(bleDevice.name || 'UFO SA', autoPickFolder);
       } catch(e) {
         scr.classList.remove('connecting');
         btn.disabled = false; btn.textContent = 'UFO SA に接続する';
-        if (e.name !== 'NotFoundError') err.textContent = 'エラー: ' + e.message;
+        if (e.name !== 'NotFoundError') {
+          // メイン画面表示中（編集画面から戻った後など）は接続画面に書けないので、トップバーに出す
+          if (scr.classList.contains('hidden')) {
+            document.getElementById('bleLabel').textContent = '接続に失敗: ' + e.message;
+            document.getElementById('reconnectBtn').style.display = '';
+          } else {
+            err.textContent = 'エラー: ' + e.message;
+          }
+        } else if (scr.classList.contains('hidden')) {
+          // デバイス選択窓を閉じた（選ばなかった）ときは、何も変わらないのでその旨だけ出す
+          document.getElementById('bleLabel').textContent = '接続を取り消しました（もう一度「UFO SA を再接続」で選べます）';
+        }
       }
     }
 
-       // ─── 対策C：Windowsの省電力タイマーを完全に黙らせる5秒間隔の超高頻度ハートビート ───
-    function startWindowsKeepAlive() {
-      if (keepAliveTimer) clearInterval(keepAliveTimer);
-      
-      keepAliveTimer = setInterval(async () => {
-        if (!bleChar) return;
-        
-        // 通常の送信（isBleBusy）が行われている間は、今回の維持パケットをスキップして衝突を防ぐ
-        if (isBleBusy) return; 
-        
-        isBleBusy = true; // ロック
-        try {
-          // 【超強力刺激1】UFOSAが誤動作しない「速度0、方向0」の無害なコマンドを5秒に1回強制的にWrite送信
-          // ※UFOSAのプロトコル上、[UFO_ID, 0x01, 0x00]（停止コマンド）を上書き送信します
-          const dummyCommand = new Uint8Array([UFO_ID, 0x01, 0x00]);
-          await bleChar.writeValueWithoutResponse(dummyCommand);
-          
-          // 【超強力刺激2】間髪入れずにReadも実行し、OSに「双方向で活発に通信中」と誤認させる
-          await bleChar.readValue(); 
-          
-          console.log('Windows生存ハートビート（Write&Read）送信成功');
-        } catch(e) {
-          // 片方が非対応でエラーになっても、Windowsの通信スタック（ドライバ層）は確実に叩かれます
-          console.log('Windows生存ハートビート実行（エラー無視で継続）');
-        } finally {
-          isBleBusy = false; // ロック解除
-        }
-      }, 5000); // ★100秒ではなく「5秒（5000ms）」に1回実行します
+    // ─── 「接続せずに続ける（テスト用）」: BLEなしでメイン画面へ進む ───
+    function skipConnect() {
+      document.getElementById('connectError').textContent = '';
+      enterMain(null);
     }
 
-    
-     // ─── 修正版 enterMain（セキュリティエラーによるプログラム停止を回避） ───
-    function enterMain(deviceName) {
-      document.getElementById('connect-screen').classList.add('hidden');
+    // ─── 接続維持（Windows側でGATTが切れる対策）: 5秒ごとに直前のコマンドを再送する ───
+    // 「停止(0x00)」を定期的に打つと動作中に止まってしまうため、最後のコマンドをそのまま再送する。
+    function startWindowsKeepAlive() {
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
+      keepAliveTimer = setInterval(async () => {
+        if (!bleChar || isBleBusy) return;
+        if (pendingCommand) { flushPendingCommand(); return; }
+        if (!lastCommand) return;      // まだ何も送っていないときは打たない
+        isBleBusy = true;
+        try {
+          await bleChar.writeValueWithoutResponse(new Uint8Array(lastCommand));
+        } catch(e) {
+          // 失敗してもドライバ層は叩ける。ログは初回だけ出す（5秒ごとに溢れるのを防ぐ）
+          if (!keepAliveWarned) { keepAliveWarned = true; console.warn('維持パケットの送信に失敗:', e); }
+        } finally {
+          isBleBusy = false;
+        }
+      }, 5000);
+    }
+
+        // ─── 修正版 enterMain     // ─── 修正版 enterMain（セキュリティエラーによるプログラム停止を回避） ───
+    // 接続が切れている状態を知らせ、ワンクリックで再接続できるボタンを出す。
+    // device chooser はユーザー操作が必要なので、自動では出せない（編集画面から戻ったときなど用）。
+    function showDisconnected(label) {
+      document.getElementById('bleDot').classList.add('disconnected');
+      document.getElementById('bleLabel').textContent = label;
+      document.getElementById('reconnectBtn').style.display = '';
+    }
+    function hideDisconnected() {
+      document.getElementById('bleDot').classList.remove('disconnected');
+      document.getElementById('reconnectBtn').style.display = 'none';
+      // 「フォルダを読み込む」はここで消さない：先に再接続だけしたときにも
+      // フォルダの再読み込みが必要なので、消すのは読み込み成功時だけ。
+    }
+    document.getElementById('reconnectBtn').addEventListener('click', () => startConnect(false));
+
+    function enterMain(deviceName, autoPickFolder = true) {
+      const scr = document.getElementById('connect-screen');
+      scr.classList.add('hidden');
+      // 接続画面の途中状態（「接続中…」、ボタン無効、connecting クラス、エラー文）を残さない。
+      // 後で再接続のために接続画面が再表示されたとき、古い状態がそのまま見える。
+      scr.classList.remove('connecting');
+      document.getElementById('connectBtn').disabled = false;
+      document.getElementById('connectBtn').textContent = 'UFO SA に接続する';
+      document.getElementById('connectError').textContent = '';
       if (deviceName) {
+        hideDisconnected();
         document.getElementById('bleLabel').textContent = deviceName + ' 接続済';
-        document.getElementById('bleDot').classList.remove('disconnected');
       } else {
         document.getElementById('bleLabel').textContent = '未接続（テスト）';
+        document.getElementById('reconnectBtn').style.display = 'none';
       }
       
       // try-catchで囲むことで、フォルダ選択ダイアログがセキュリティ制限で弾かれても
       // プログラム全体がクラッシュしてBLE通信に悪影響を及ぼすのを防ぎます
       try {
-        if (!isTouchDevice()) {
+        if (autoPickFolder && supportsFileSystemAccess) {
           document.getElementById('addFolderBtn').click();
         }
       } catch (folderError) {
@@ -496,6 +538,7 @@
       if (bleDevice && !isAutoReconnecting) {
         isAutoReconnecting = true;
         document.getElementById('bleLabel').textContent = '自動再接続中…';
+        document.getElementById('reconnectBtn').style.display = 'none';
         console.log('Windows対策: 150秒の切断を検知。自動高速再接続を開始します。');
         
         try {
@@ -504,10 +547,16 @@
           const service = await bleServer.getPrimaryService(UFO_SERVICE);
           bleChar = await service.getCharacteristic(UFO_CHAR);
           
-          // 再度タイマーを起動
+          // 再度タイマーを起動し、切れる直前の状態を機器に送り直す
           startWindowsKeepAlive();
+          if (!flushPendingCommand() && lastCommand && bleChar) {
+            // 切断前に送信が詰まっていなかった場合は、最後のコマンドをそのまま送り直す
+            bleChar.writeValueWithoutResponse(new Uint8Array(lastCommand))
+              .catch(e => console.warn('復帰時の再送に失敗:', e));
+          }
           
           document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 復帰済';
+          document.getElementById('bleDot').classList.remove('disconnected');
           console.log('Windows対策: 自動高速再接続に成功しました！');
           isAutoReconnecting = false;
           return; // 通常の切断処理（confirm）へ行かずに終了
@@ -517,11 +566,11 @@
         }
       }
 
-      // 自動再接続も失敗した場合のみ、従来の確認ダイアログを出す
-      document.getElementById('bleDot').classList.add('disconnected');
-      document.getElementById('bleLabel').textContent = '切断されました';
+      // 自動再接続も失敗した場合のみ、従来の確認ダイアログを出す。
+      // ダイアログで「キャンセル」を選んでも、トップバーの「UFO SA を再接続」から復旧できる。
+      showDisconnected('切断されました — 「UFO SA を再接続」で復旧できます');
       
-      if (confirm('UFO SA との接続が切れました。再接続しますか？')) {
+      if (confirm('UFO SA との接続が切れました。再接続しますか？\n（「キャンセル」でも、上部の「UFO SA を再接続」ボタンから再接続できます）')) {
         const scr = document.getElementById('connect-screen');
         scr.classList.remove('hidden','connecting');
         document.getElementById('connectBtn').disabled = false;
@@ -534,6 +583,79 @@
     //  ライブラリ
     // ══════════════════════════════
     let library = {};
+
+    // 音量と速度倍率はこのブラウザに保持する（既定: 音量100% / 倍率50%）
+    function setVolume(v) {
+      player.volume = Math.max(0, Math.min(1, v/100));
+      localStorage.setItem('ble-volume', String(v));
+      document.getElementById('volumeLabel').textContent = v + '%';
+    }
+    function setSpeedRate(v) {
+      speedRateValue = Math.max(0, Math.min(1, v/100));
+      localStorage.setItem('ble-speed-rate', String(v));
+      document.getElementById('speedRateLabel').textContent = v + '%';
+    }
+    function restoreUIPreferences() {
+      const v = localStorage.getItem('ble-volume');
+      if (v !== null) { document.getElementById('volumeSlider').value = v; setVolume(v); }
+      const s = localStorage.getItem('ble-speed-rate');
+      if (s !== null) { document.getElementById('speedRateSlider').value = s; setSpeedRate(s); }
+    }
+
+    // File System Access APIが無い環境（Androidなど）で編集したCSVをこのブラウザに保存し、
+    // フォルダ読み込み後に元のCSVへ上書きして反映する。
+    const CSV_EDIT_KEY = 'ble-csv-edits';
+    function loadCsvEdits() { try { return JSON.parse(localStorage.getItem(CSV_EDIT_KEY) || '{}'); } catch { return {}; } }
+    function applyCsvOverride(base) {
+      const text = loadCsvEdits()[base];
+      if (typeof text !== 'string') return false;
+      csvFiles[base] = new File([text], base + '.csv', { type: 'text/csv' });
+      return true;
+    }
+    function clearCsvEdit(base) {
+      const edits = loadCsvEdits(); delete edits[base];
+      localStorage.setItem(CSV_EDIT_KEY, JSON.stringify(edits));
+      // 元ファイルが残っていればそこへ戻す（残っていない場合は未割当になる）
+      if (originalCsv[base]) {
+        csvFiles[base] = originalCsv[base];
+        if (originalCsv[base]._handle) csvHandles[base] = originalCsv[base]._handle;
+      } else {
+        delete csvFiles[base]; delete csvHandles[base];
+      }
+      refreshCsvBadges();
+    }
+    // 再生画面のトラック一覧のCSVバッジを作り直す（作品を選び直さずに反映する）
+    function refreshCsvBadges() {
+      document.querySelectorAll('#tracksEl .track').forEach(el => {
+        const base = el.dataset.base;
+        const badge = el.querySelector('.csv-badge');
+        if (!base || !badge) return;
+        const has = !!csvFiles[base];
+        badge.textContent = has ? 'CSV' : '未割当';
+        badge.classList.toggle('missing', !has);
+      });
+    }
+    function hasCsvEdit(base) { return typeof loadCsvEdits()[base] === 'string'; }
+    // トラック名を変更したら、保存済みの編集CSVのキーも引っ越しする
+    function renameCsvEditKey(from, to) {
+      const edits = loadCsvEdits();
+      if (typeof edits[from] !== 'string') return;
+      edits[to] = edits[from]; delete edits[from];
+      localStorage.setItem(CSV_EDIT_KEY, JSON.stringify(edits));
+    }
+    function dropCsvEditKey(base) {
+      const edits = loadCsvEdits();
+      if (!(base in edits)) return;
+      delete edits[base];
+      localStorage.setItem(CSV_EDIT_KEY, JSON.stringify(edits));
+    }
+    // ライブラリにあるトラックについて、保存済みの編集CSVを反映する
+    function applyAllCsvEdits() {
+      Object.values(library).forEach(w => {
+        const bases = [...(w.tracks||[]), ...Object.values(w.children||{}).flat()].map(t => t.base);
+        bases.forEach(b => applyCsvOverride(b));
+      });
+    }
 
     function loadLibraryFromStorage() {
       try { library = JSON.parse(localStorage.getItem('ble-library') || '{}'); }
@@ -552,8 +674,34 @@
       const file = event.target.files[0]; if (!file) return;
       const reader = new FileReader();
       reader.onload = (e) => {
-        try { library = JSON.parse(e.target.result); saveLibraryToStorage(); renderLibrarySidebar(); alert('ライブラリを読み込みました'); }
-        catch { alert('ファイルの形式が正しくありません'); }
+        let parsed;
+        try { parsed = JSON.parse(e.target.result); }
+        catch { alert('ファイルの形式が正しくありません'); return; }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { alert('ライブラリJSONの形式が正しくありません'); return; }
+        // 欠けた項目は補って、読み込み後に表示が壊れないようにする
+        const normalized = {};
+        for (const [key, w] of Object.entries(parsed)) {
+          if (!w || typeof w !== 'object') continue;
+          normalized[key] = {
+            id: w.id || key,
+            folderName: w.folderName || '',
+            title: w.title || w.folderName || key,
+            circle: w.circle || '', cv: w.cv || '', rj: w.rj || '',
+            addedAt: typeof w.addedAt === 'number' ? w.addedAt : Date.now(),
+            plays: typeof w.plays === 'number' ? w.plays : 0,
+            fav: !!w.fav,
+            tracks: Array.isArray(w.tracks) ? w.tracks.filter(t => t && typeof t.base === 'string') : [],
+            children: (w.children && typeof w.children === 'object')
+              ? Object.fromEntries(Object.entries(w.children).map(([k, v]) => [k, Array.isArray(v) ? v.filter(t => t && typeof t.base === 'string') : []]))
+              : {},
+          };
+        }
+        const count = Object.keys(normalized).length;
+        if (!count) { alert('有効な作品エントリーがありませんでした'); return; }
+        if (!confirm(`現在のライブラリ（${Object.keys(library).length}件）に ${count} 件を統合します。同じIDの作品は読み込んだ内容で上書きされます（フォルダ名が同じでもIDが違えば別作品として追加されます）。\nよければ OK を選んでください。`)) return;
+        library = { ...library, ...normalized };
+        saveLibraryToStorage(); applyAllCsvEdits(); renderLibrarySidebar();
+        alert(`${count} 件を読み込みました`);
       };
       reader.readAsText(file); event.target.value = '';
     }
@@ -562,13 +710,17 @@
     //  ファイル管理
     // ══════════════════════════════
     let mediaFiles = {}, csvFiles = {};
+    const originalCsv = {};   // フォルダ由来のCSV（編集CSVを解除したときに戻す）
     let pendingFolders = [], currentMetaIndex = 0, editingWorkId = null;
 
     // File System Access API対応判定
     const supportsFileSystemAccess = 'showDirectoryPicker' in window;
-    // タッチデバイス判定（Android ChromeはsupportsFileSystemAccessがtrueになるため別途判定）
-    const isTouchDevice = () => navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 
+    const AUDIO_EXT = ['mp3','wav','ogg','oga','m4a','aac','flac','opus'];
+    const VIDEO_EXT = ['mp4','m4v','webm','mov','ogv'];
+
+    // 作品名・フォルダ名・ファイル名はユーザー入力なので、innerHTMLにそのまま入れない
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     // ファイル名は自然順（track2 < track10）で並べる。エクスプローラの順と揃える。
     const naturalCompare = (a, b) => a.localeCompare(b, 'ja', { numeric: true, sensitivity: 'base' });
 
@@ -605,7 +757,7 @@
     });
 
     document.getElementById('addFolderBtn').addEventListener('click', async () => {
-      if (supportsFileSystemAccess && !isTouchDevice()) {
+      if (supportsFileSystemAccess) {
         // PC: File System Access API
         try {
           const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
@@ -656,7 +808,7 @@
     });
 
     // File System Access APIでフォルダを再帰的にスキャン
-    async function scanDirHandle(dirHandle, folderName, parentFolderName) {
+    async function scanDirHandle(dirHandle, folderName, parentFolderName, isRescan = false) {
       const files = [], subDirs = [];
       for await (const entry of dirHandle.values()) {
         if (entry.kind === 'file') {
@@ -687,13 +839,19 @@
       // この時点でのfolderNameが最上位か確認して、サブフォルダの親を正しく渡す
       const isTopLevel = !parentFolderName;
       for (const sub of subDirs) {
-        await scanDirHandle(sub.handle, sub.name, isTopLevel ? folderName : parentFolderName);
+        await scanDirHandle(sub.handle, sub.name, isTopLevel ? folderName : parentFolderName, isRescan);
       }
 
-      if (isTopLevel) reportCollisions();
-      // ルートの処理が全部終わったらまとめてメタモーダル表示
-      if (isTopLevel && pendingFolders.length > 0 && currentMetaIndex === 0) {
-        showMetaModal();
+      if (isTopLevel) {
+        // 編集画面から戻ったときの読み直しでは、同じ警告を毎回出さない。
+        // デスク上のファイルを変えていないのに、戻るたびにモーダルが出ると止まっているように見える。
+        if (isRescan) collisionPairs.clear();
+        else reportCollisions();
+        // 同上。読み直しで作品情報モーダルを勝手に開かない（本当に新しい作品が増えた場合は
+        // フォルダ名のまま登録され、「情報を編集」で後から直せる）。
+        if (!isRescan && pendingFolders.length > 0 && currentMetaIndex === 0) {
+          showMetaModal();
+        }
       }
     }
 
@@ -723,7 +881,7 @@
       files.forEach(file => {
         const ext  = file.name.split('.').pop().toLowerCase();
         const base = file.name.replace(/\.[^.]+$/, '');
-        if (['mp4','mp3','wav','ogg','m4a','webm'].includes(ext)) {
+        if (AUDIO_EXT.includes(ext) || VIDEO_EXT.includes(ext)) {
           // 同じフォルダ内で base 名が重複している（拡張子が違う）場合は後勝ちになる
           if (folderMedia[base]) sameFolderDup.push(`${folderMedia[base].name} と ${file.name}`);
           folderMedia[base] = file;
@@ -759,13 +917,16 @@
         const csvBase = csvMapping[mb];
         if (csvBase) {
           csvFiles[mb] = folderCsv[csvBase];
+          originalCsv[mb] = folderCsv[csvBase];   // 「編集CSVの解除」で戻すための元ファイル
           // File System Access APIのハンドルをキャッシュ
           if (folderCsv[csvBase]?._handle) csvHandles[mb] = folderCsv[csvBase]._handle;
         } else {
           // 同じ base 名が別のフォルダで先に読まれたとき、前のフォルダのCSVを残さない
           // （残ると、このフォルダにCSVが無いトラックへ前のフォルダのCSVがそのまま当たってしまう）
-          delete csvFiles[mb]; delete csvHandles[mb];
+          delete csvFiles[mb]; delete csvHandles[mb]; delete originalCsv[mb];
         }
+        // このブラウザに保存された編集CSVがあれば、フォルダ内のCSVより優先する
+        applyCsvOverride(mb);
       });
 
       const tracks = mediaBases.map(base => ({ base }));
@@ -788,8 +949,18 @@
         // 既存フォルダの場合はトラック情報を更新
         library[existingId].tracks = tracks;
         saveLibraryToStorage();
-        if (currentTrack && folderMedia[currentTrack]) loadTrack(currentTrack);
         renderLibrarySidebar();
+        // 読み直した作品が選択中なら、トラック一覧を作り直す。
+        // 放置すると「未読込」表示のまま残り、読み終わったトラックを押しても
+        // 「まだ読み込まれていません」と誤って弾かれる（編集画面から戻った後の Android の
+        // 「＋ フォルダを追加」が、このアプリで唯一の復元経路なので特に必要）。
+        // 再生中のトラックがまだ見つかるなら、一覧を作り直したあとにそれを続ける。
+        if (currentWorkId === existingId) {
+          selectWork(existingId, false);
+          if (currentTrack && folderMedia[currentTrack]) loadTrack(currentTrack);
+          // 編集画面から戻って開けていなかったトラックがあれば、ここで開く
+          if (pendingEditorWorkId === existingId) restorePendingTrack();
+        }
       } else if (mediaBases.length) {
         const workId = 'work_' + Date.now() + '_' + Math.random().toString(36).slice(2);
         library[workId] = { id:workId, folderName, title:folderName, circle:'', cv:'', rj:'', addedAt:Date.now(), plays:0, fav:false, tracks, children:{} };
@@ -891,10 +1062,10 @@
       let works   = Object.values(library);
 
       if (query) works = works.filter(w =>
-        w.title.toLowerCase().includes(query)  ||
-        w.circle.toLowerCase().includes(query) ||
-        w.cv.toLowerCase().includes(query)     ||
-        w.rj.toLowerCase().includes(query)
+        (w.title||'').toLowerCase().includes(query)  ||
+        (w.circle||'').toLowerCase().includes(query) ||
+        (w.cv||'').toLowerCase().includes(query)     ||
+        (w.rj||'').toLowerCase().includes(query)
       );
 
       // トラックまたはサブフォルダを持つ作品のみ表示
@@ -908,10 +1079,10 @@
       });
 
       works.sort((a,b) => {
-        if (sort==='added')  return a.addedAt - b.addedAt;
-        if (sort==='title')  return a.title.localeCompare(b.title,'ja');
-        if (sort==='circle') return a.circle.localeCompare(b.circle,'ja');
-        if (sort==='plays')  return b.plays - a.plays;
+        if (sort==='added')  return (a.addedAt||0) - (b.addedAt||0);
+        if (sort==='title')  return (a.title||'').localeCompare(b.title||'','ja',{numeric:true});
+        if (sort==='circle') return (a.circle||'').localeCompare(b.circle||'','ja',{numeric:true});
+        if (sort==='plays')  return (b.plays||0) - (a.plays||0);
         if (sort==='fav')    return (b.fav?1:0)-(a.fav?1:0);
         return 0;
       });
@@ -934,12 +1105,12 @@
         div.innerHTML = `
           <div class="work-item-header">
             <span style="font-size:10px;color:var(--text-dim);margin-right:4px;flex-shrink:0;">${hasContent?(isExpanded?'▾':'▸'):'　'}</span>
-            <span class="work-title">${w.title}</span>
+            <span class="work-title">${esc(w.title)}</span>
             <button class="fav-btn ${w.fav?'active':''}" data-id="${w.id}">★</button>
           </div>
-          <div class="work-meta">${[w.circle,w.cv].filter(Boolean).join('／')||'情報なし'}</div>
-          ${w.rj?`<div class="work-rj">${w.rj}</div>`:''}
-          <div class="work-plays">再生 ${w.plays}回</div>`;
+          <div class="work-meta">${esc([w.circle,w.cv].filter(Boolean).join('／'))||'情報なし'}</div>
+          ${w.rj?`<div class="work-rj">${esc(w.rj)}</div>`:''}
+          <div class="work-plays">再生 ${w.plays||0}回</div>`;
 
         div.addEventListener('click', (e) => {
           if (e.target.classList.contains('fav-btn')) return;
@@ -993,9 +1164,10 @@
         const row = document.createElement('div');
         row.style.cssText = `padding:6px 14px 6px ${14+depth*14}px; cursor:pointer; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-dim); display:flex; align-items:center; gap:6px; border-left:3px solid transparent; transition:all .15s;`;
         row.innerHTML = `
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">▷ ${t.base}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">▷ ${esc(t.base)}</span>
           <span style="font-size:9px;padding:1px 5px;border-radius:3px;flex-shrink:0;${hasCSV?'background:rgba(79,255,176,.15);color:var(--success)':'background:rgba(255,183,77,.1);color:var(--warning)'}">${hasCSV?'CSV':'未割当'}</span>
-          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-file" data-base="${t.base}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-file" data-base="${t.base}" title="削除">✕</button>`:''}`;
+          ${hasCsvEdit(t.base)?`<span style="font-size:9px;padding:1px 5px;border-radius:3px;flex-shrink:0;background:rgba(124,106,255,.18);color:var(--accent)">編集済</span>`:''}
+          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-file" data-base="${esc(t.base)}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-file" data-base="${esc(t.base)}" title="削除">✕</button>`:''}`;
         row.addEventListener('mouseenter', ()=>{ row.style.background='var(--bg3)'; });
         row.addEventListener('mouseleave', ()=>{ row.style.background=''; });
         row.addEventListener('click', (e) => {
@@ -1034,9 +1206,9 @@
         row.style.cssText = `padding:7px 14px 7px ${14+depth*14}px; cursor:pointer; font-size:11px; font-family:'Syne',sans-serif; color:var(--text-dim); display:flex; align-items:center; gap:6px; transition:all .15s;`;
         row.innerHTML = `
           <span style="font-size:10px;">${isExp?'▾':'▸'}</span>
-          <span style="font-weight:600;flex:1;">${subName}</span>
+          <span style="font-weight:600;flex:1;">${esc(subName)}</span>
           <span style="font-size:9px;font-family:'JetBrains Mono',monospace;">${subTracks.length}曲</span>
-          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-dir" data-name="${subName}" data-parent="${parentWorkId}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-dir" data-name="${subName}" data-parent="${parentWorkId}" title="削除">✕</button>`:''}`;
+          ${supportsFileSystemAccess?`<button class="file-op-btn" data-action="rename-dir" data-name="${esc(subName)}" data-parent="${parentWorkId}" title="リネーム">✎</button><button class="file-op-btn" data-action="delete-dir" data-name="${esc(subName)}" data-parent="${parentWorkId}" title="削除">✕</button>`:''}`;
         row.addEventListener('mouseenter', ()=>{ row.style.background='var(--bg3)'; });
         row.addEventListener('mouseleave', ()=>{ row.style.background=''; });
         row.addEventListener('click', (e) => {
@@ -1066,10 +1238,11 @@
     // ══════════════════════════════
     let currentWorkId = null, currentTrack = null, trackList = [], currentTrackIndex = 0, isLoopAll = false;
 
-    function selectWork(workId) {
+    // 作品を選ぶ。autoLoad=false のときはトラック一覧を作り直すだけで、先頭トラックを
+    // 再生しない（フォルダを読み直したあとに、開きたいトラック以外を勝手に読ませないため）。
+    function selectWork(workId, autoLoad = true) {
       currentWorkId = workId;
       const w = library[workId];
-      w.plays++; saveLibraryToStorage();
 
       document.getElementById('work-title-display').textContent  = w.title;
       document.getElementById('work-rj-display').textContent     = w.rj;
@@ -1092,43 +1265,56 @@
         const isLoaded  = !!mediaFiles[t.base];
         const div = document.createElement('div');
         div.className = 'track' + (i===0?' active':'') + (isLoaded?'':' unloaded');
-        div.innerHTML = `<span>${String(i+1).padStart(2,'0')}. ${t.base}</span><span class="csv-badge ${hasCSV?'':'missing'}">${hasCSV?'CSV':'未割当'}</span>`;
-        div.addEventListener('click', () => { if(isLoaded) loadTrack(t.base); });
+        div.dataset.base = t.base;
+        div.innerHTML = `<span>${String(i+1).padStart(2,'0')}. ${esc(t.base)}</span><span class="csv-badge ${hasCSV?'':'missing'}">${hasCSV?'CSV':'未割当'}</span>`;
+        div.addEventListener('click', () => {
+          if (!isLoaded) { alert('このトラックのファイルはまだ読み込まれていません。「＋ フォルダを追加」でフォルダをもう一度選択してください。'); return; }
+          loadTrack(t.base);
+        });
         // 右クリックメニュー
         div.addEventListener('contextmenu', (e) => {
           e.preventDefault();
-          showContextMenu(e.clientX, e.clientY, [
-            { label: 'CSVを編集', action: () => { currentTrack=t.base; openCsvSelect(); } },
-          ]);
+          const items = [{ label: 'CSVを編集', action: () => { currentTrack=t.base; openCsvSelect(); } }];
+          if (hasCsvEdit(t.base)) items.push({ separator: true }, { label: '編集CSVの反映を取り消す', action: () => { clearCsvEdit(t.base); renderLibrarySidebar(); } });
+          showContextMenu(e.clientX, e.clientY, items);
         });
         tracksEl.appendChild(div);
       });
 
-      if (trackList.length) loadTrack(trackList[0]);
+      if (autoLoad && trackList.length) loadTrack(trackList[0]);
     }
 
     // ══════════════════════════════
     //  再生
     // ══════════════════════════════
     const player = document.getElementById('media-player');
+    let playCounted = false;   // 1トラックにつき1回だけ再生回数に加える
+    let mediaBlobURL = null;   // 前トラックの ObjectURL を解放する
 
     function loadTrack(base) {
       player.pause();
       document.getElementById('playBtn').textContent = '▶';
-      sendCommand(0, 0);
+      sendStop();
+      // 前のトラックのマーカーが残ったまま新トラックの再生位置を照合しないようにする
+      schedule = []; lastSentIndex = -1;
+      playCounted = false;
+      if (mediaBlobURL) { URL.revokeObjectURL(mediaBlobURL); mediaBlobURL = null; }
       currentTrack      = base;
       currentTrackIndex = trackList.indexOf(base);
       const file = mediaFiles[base];
       if (!file) return;
       document.querySelectorAll('.track').forEach(t => {
-        t.classList.toggle('active', t.querySelector('span').textContent.includes(base));
+        t.classList.toggle('active', t.dataset.base === base);
       });
 
-      const isAudio = file.type.startsWith('audio/');
+      // MIME type が空（FSA/webkitdirectoryで付かないことがある）でも判るように拡張子を優先する
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      const isAudio = AUDIO_EXT.includes(ext) || (!VIDEO_EXT.includes(ext) && (file.type || '').startsWith('audio/'));
 
       if (isAudio) {
         // 音声ファイル：playerを非表示にしてサムネイル表示
-        player.src = URL.createObjectURL(file);
+        mediaBlobURL = URL.createObjectURL(file);
+        player.src = mediaBlobURL;
         player.load();
         player.style.display = 'none';
         document.querySelector('.no-media').style.display = 'none';
@@ -1136,54 +1322,43 @@
         showAudioThumbnail(base);
       } else {
         // 動画ファイル
-        player.src = URL.createObjectURL(file);
+        mediaBlobURL = URL.createObjectURL(file);
+        player.src = mediaBlobURL;
         player.load();
         player.style.display = 'block';
         document.querySelector('.no-media').style.display = 'none';
         hideThumbnail();
       }
 
-      if (csvFiles[base]) loadCSV(csvFiles[base]);
+      if (csvFiles[base]) loadCSV(csvFiles[base], base);
       else { schedule=[]; renderTimeline(); }
     }
 
     // サムネイル要素
-    let thumbnailEl = null;
+    let thumbnailEl = null, thumbnailURL = null;
     function showAudioThumbnail(base) {
       hideThumbnail();
-      // 同名の画像ファイルを探す（jpg/png/webp）
-      const imgExts = ['jpg','jpeg','png','webp','gif'];
-      let imgFile = null;
-      for (const ext of imgExts) {
-        if (mediaFiles[base + '_thumb'] || mediaFiles[base]) {
-          // 同じフォルダの画像を探す
-          const w = library[currentWorkId];
-          if (w) {
-            const folderHandle = dirHandles[w.folderName];
-            if (folderHandle) {
-              // 非同期で画像を検索
-              searchThumbnailInFolder(folderHandle, base);
-              return;
-            }
-          }
-        }
-        break;
-      }
+      const w = currentWorkId ? library[currentWorkId] : null;
+      const folderHandle = w ? dirHandles[w.folderName] : null;
+      if (folderHandle) { searchThumbnailInFolder(folderHandle, base); return; }
+      showDefaultAudioView();
     }
 
+    // 画像は「トラック名と同名 → cover / jacket 等の決まり名前 → 最初に見つかった画像」の順で選ぶ
     async function searchThumbnailInFolder(folderHandle, base) {
-      const imgExts = ['jpg','jpeg','png','webp','gif'];
+      const imgExts  = ['jpg','jpeg','png','webp','gif'];
+      const priority = [base.toLowerCase(), 'cover', 'jacket', 'thumbnail', 'thumb', 'album', 'main', 'title'];
+      let fallback = null;
       try {
         for await (const entry of folderHandle.values()) {
-          if (entry.kind === 'file') {
-            const ext = entry.name.split('.').pop().toLowerCase();
-            if (imgExts.includes(ext)) {
-              const imgFile = await entry.getFile();
-              displayThumbnail(imgFile);
-              return;
-            }
-          }
+          if (entry.kind !== 'file') continue;
+          const ext  = (entry.name.split('.').pop() || '').toLowerCase();
+          if (!imgExts.includes(ext)) continue;
+          const stem = entry.name.replace(/\.[^.]+$/, '').toLowerCase();
+          if (priority.includes(stem)) { displayThumbnail(await entry.getFile()); return; }
+          if (!fallback) fallback = entry;
         }
+        if (fallback) { displayThumbnail(await fallback.getFile()); return; }
       } catch(e) {}
       // 画像が見つからない場合はデフォルト表示
       showDefaultAudioView();
@@ -1193,7 +1368,8 @@
       hideThumbnail();
       const videoWrap = document.getElementById('video-wrap');
       thumbnailEl = document.createElement('img');
-      thumbnailEl.src = URL.createObjectURL(imgFile);
+      thumbnailURL = URL.createObjectURL(imgFile);
+      thumbnailEl.src = thumbnailURL;
       thumbnailEl.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
       videoWrap.appendChild(thumbnailEl);
     }
@@ -1203,12 +1379,13 @@
       const videoWrap = document.getElementById('video-wrap');
       thumbnailEl = document.createElement('div');
       thumbnailEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--text-dim);';
-      thumbnailEl.innerHTML = '<div style="font-size:64px;opacity:.4;">♪</div><div style="font-size:12px;font-family:\'JetBrains Mono\',monospace;">' + (currentTrack||'') + '</div>';
+      thumbnailEl.innerHTML = '<div style="font-size:64px;opacity:.4;">♪</div><div style="font-size:12px;font-family:\'JetBrains Mono\',monospace;">' + esc(currentTrack||'') + '</div>';
       videoWrap.appendChild(thumbnailEl);
     }
 
     function hideThumbnail() {
       if (thumbnailEl) { thumbnailEl.remove(); thumbnailEl = null; }
+      if (thumbnailURL) { URL.revokeObjectURL(thumbnailURL); thumbnailURL = null; }
     }
 
     player.addEventListener('timeupdate', () => {
@@ -1217,12 +1394,11 @@
       document.getElementById('timedur').textContent     = formatTime(dur);
       document.getElementById('seekbarFill').style.width = (dur?cur/dur*100:0)+'%';
       document.getElementById('tlPlayhead').style.left   = (dur?cur/dur*100:0)+'%';
-      processBLESchedule(cur*1000); // time_ms はミリ秒
     });
 
     player.addEventListener('ended', () => {
       document.getElementById('playBtn').textContent = '▶';
-      sendCommand(0,0);
+      sendStop();
       if (isLoopAll && trackList.length) {
         currentTrackIndex = (currentTrackIndex+1) % trackList.length;
         loadTrack(trackList[currentTrackIndex]);
@@ -1231,8 +1407,15 @@
       }
     });
 
-    player.addEventListener('pause',  () => sendCommand(0,0));
-    player.addEventListener('play',   () => { lastSentIndex=-1; });
+    player.addEventListener('pause',  () => sendStop());
+    player.addEventListener('play',   () => {
+      lastSentIndex=-1;
+      if (!playCounted && currentWorkId && library[currentWorkId]) {
+        library[currentWorkId].plays = (library[currentWorkId].plays||0)+1;
+        saveLibraryToStorage();
+        playCounted = true;
+      }
+    });
     player.addEventListener('seeked', () => { lastSentIndex=-1; });
 
     // seekbarスライド＋スマホ全画面スワイプ
@@ -1336,15 +1519,61 @@
     //  CSV
     // ══════════════════════════════
     let schedule=[], lastSentIndex=-1;
+    let scheduleTickerId = null;
+    let hiddenTickerBound = false, hiddenTickerTimer = null;
 
-    function loadCSV(file) {
+    function tickSchedule() {
+      if (!schedule.length || player.paused || !player.duration) return;
+      processBLESchedule(player.currentTime * 1000);
+    }
+
+    // timeupdate は約4Hzしか来ないため、rAFで再生位置を照合する（time_ms はミリ秒）
+    function scheduleTicker() {
+      scheduleTickerId = requestAnimationFrame(scheduleTicker);
+      tickSchedule();
+    }
+    scheduleTickerId = requestAnimationFrame(scheduleTicker);
+
+    // rAF は見えないタブでは走らない。画面オフ・タブ裏化での再生中にコマンドが
+    // 止まらないように、隠れている間だけ timeupdate と1秒間隔のタイマーで照合する。
+    function enableHiddenTicker() {
+      if (hiddenTickerBound) return;
+      hiddenTickerBound = true;
+      player.addEventListener('timeupdate', tickSchedule);
+      hiddenTickerTimer = setInterval(tickSchedule, 1000);
+    }
+    function disableHiddenTicker() {
+      if (!hiddenTickerBound) return;
+      hiddenTickerBound = false;
+      player.removeEventListener('timeupdate', tickSchedule);
+      if (hiddenTickerTimer) { clearInterval(hiddenTickerTimer); hiddenTickerTimer = null; }
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) enableHiddenTicker(); else disableHiddenTicker();
+    });
+    if (document.hidden) enableHiddenTicker();
+
+    function loadCSV(file, base) {
       const reader = new FileReader();
       reader.onload = (e) => {
-        const lines = e.target.result.trim().split('\n').slice(1);
+        // 読込みは非同期なので、間に別のトラックへ切り替わったら結果を捨てる。
+        // 捨てないと、前のトラックのCSVが後から解決して schedule（BLEの動作とタイムラインの
+        // マーカー）とサムネイルが別のトラックのものになる。
+        if (base && base !== currentTrack) return;
+        const lines = e.target.result.replace(/\r/g, '').trim().split('\n').slice(1);
         schedule = lines.map(line => {
           const [time_ms,direction,strength] = line.split(',').map(s=>s.trim());
-          return { time_ms:parseInt(time_ms), direction:parseInt(direction), strength:parseInt(strength) };
-        }).filter(r=>!isNaN(r.time_ms));
+          const t = parseInt(time_ms);
+          if (isNaN(t) || t < 0) return null;
+          return {
+            time_ms: t,
+            direction: parseInt(direction) === 1 ? 1 : 0,
+            strength: Math.max(0, Math.min(100, parseInt(strength) || 0))
+          };
+        }).filter(Boolean).sort((a,b) => a.time_ms - b.time_ms);
+        lastSentIndex = -1;
+        // pendingCommand は消さない。トラック切替で sendStop() が積んだ停止を
+        // 消してしまうと、機器が前トラックの動きを維持したまま次に入る。
         // durationが既に取得済みならすぐ描画、まだならloadedmetadataを待つ
         if (player.readyState >= 1 && player.duration) {
           renderTimeline();
@@ -1375,10 +1604,13 @@
 
     function processBLESchedule(currentMs) {
       if (!schedule.length) return;
-      for (let i=lastSentIndex+1; i<schedule.length; i++) {
-        if (schedule[i].time_ms<=currentMs) { sendCommand(schedule[i].direction,schedule[i].strength); lastSentIndex=i; }
-        else break;
-      }
+      // 同じティックで複数行を通過したら、最後の1つだけ送る（機器には最新の状態だけが意味を持つ）
+      let next = lastSentIndex;
+      while (next + 1 < schedule.length && schedule[next + 1].time_ms <= currentMs) next++;
+      if (next === lastSentIndex) return;
+      lastSentIndex = next;
+      pendingCommand = encodeCommand(schedule[next].direction, schedule[next].strength);
+      flushPendingCommand();
     }
 
     // タイムラインスライド（スムーズシーク）
@@ -1447,6 +1679,13 @@
       const newName = prompt('新しいフォルダ名', w.folderName);
       if (!newName || newName === w.folderName) return;
       if (!rootDirHandle) { alert('フォルダが見つかりません。再読み込みしてください。'); return; }
+      // File System Access APIには親フォルダを取り出す方法がないため、ユーザーが選んだフォルダが
+      // 作品フォルダそのものだと、その中の操作（中に新名を作る・同名の子を消す）になってしまう。
+      // 黙って半端な状態（ライブラリだけが新名を指す）にならないように、ここで止める。
+      if (rootDirHandle.name === w.folderName) {
+        alert('このアプリで選択したフォルダそのものは、ここからリネームできません（ブラウザのAPIに親フォルダの取得が無いため）。ファイルマネージャーで名前を変えたあと、「＋ フォルダを追加」で読み直してください。');
+        return;
+      }
       try {
         const oldHandle = dirHandles[w.folderName];
         const newDirHandle = await rootDirHandle.getDirectoryHandle(newName, { create: true });
@@ -1497,7 +1736,7 @@
           const file = await entry.getFile();
           const newHandle = await dstHandle.getFileHandle(entry.name, { create: true });
           const writable  = await newHandle.createWritable();
-          await writable.write(await file.arrayBuffer());
+          await writable.write(file);
           await writable.close();
         } else if (entry.kind === 'directory') {
           const subDst = await dstHandle.getDirectoryHandle(entry.name, { create: true });
@@ -1522,8 +1761,7 @@
         // 新ファイルを作成してコピー
         const newFileHandle = await parentHandle.getFileHandle(newName + '.' + ext, { create: true });
         const writable = await newFileHandle.createWritable();
-        const buf = await mFile.arrayBuffer();
-        await writable.write(buf);
+        await writable.write(mFile);
         await writable.close();
 
         // 旧ファイルを削除
@@ -1536,7 +1774,9 @@
         mediaOrigin[newName] = mediaOrigin[base];
         delete mediaFiles[base]; delete mediaOrigin[base];
         if (csvFiles[base])  { csvFiles[newName]  = csvFiles[base];  delete csvFiles[base]; }
+        if (originalCsv[base]) { originalCsv[newName] = originalCsv[base]; delete originalCsv[base]; }
         if (csvHandles[base]){ csvHandles[newName] = csvHandles[base]; delete csvHandles[base]; }
+        renameCsvEditKey(base, newName);
 
         // ライブラリ更新
         updateTrackBase(workId, base, newName);
@@ -1558,8 +1798,9 @@
           await parentHandle.removeEntry(csvFiles[base].name).catch(()=>{});
         }
 
-        delete mediaFiles[base]; delete mediaOrigin[base];
+        delete mediaFiles[base]; delete mediaOrigin[base]; delete originalCsv[base];
         delete csvFiles[base]; delete csvHandles[base];
+        dropCsvEditKey(base);
         removeTrackFromWork(workId, base);
         saveLibraryToStorage();
         renderLibrarySidebar();
@@ -1586,7 +1827,7 @@
               const file = await entry.getFile();
               const newHandle = await newDirHandle.getFileHandle(entry.name, { create: true });
               const writable  = await newHandle.createWritable();
-              await writable.write(await file.arrayBuffer());
+              await writable.write(file);
               await writable.close();
             }
           }
@@ -1685,6 +1926,19 @@
         await saveFileToIDB('editor-csv-handle', null).catch(()=>{});
       }
 
+      // 作品フォルダのハンドルも保存する（メイン画面に戻ったときにフォルダを読み直すため）。
+      // どの作品のものかも一緒に持たせる。別作品のハンドルが残っていると、戻ったときに
+      // 違うフォルダを読み直して作品を増やしてしまう。
+      const work = currentWorkId ? library[currentWorkId] : null;
+      const workDir = work ? dirHandles[work.folderName] : null;
+      if (workDir) {
+        try { await saveFileToIDB('work-dir', { workId: currentWorkId, dirHandle: workDir }); }
+        catch(e) { console.warn('作品フォルダのハンドル保存に失敗（復元は手動選択になります）:', e); }
+      } else {
+        try { await saveFileToIDB('work-dir', null); }
+        catch(e) { /* 消せなくても復元は手動選択になるだけ */ }
+      }
+
       window.location.href = 'editor.html';
     }
 
@@ -1707,6 +1961,118 @@
         tx.onerror    = reject;
       });
     }
+
+    async function loadFileFromIDB(key) {
+      const db = await openIDB();
+      return new Promise((resolve, reject) => {
+        const tx  = db.transaction('files', 'readonly');
+        const req = tx.objectStore('files').get(key);
+        req.onsuccess = () => resolve(req.result ?? null);
+        req.onerror   = () => reject(req.error);
+      });
+    }
+
+    // ══════════════════════════════
+    //  編集画面から戻ったときの復元
+    //  ページ遷移でGATT接続は切れる。作品とトラックの選択は引き継ぎ、
+    //  フォルダは保存しておいたハンドルから読み直す（許可が続いている場合のみ）。
+    //  機器の再接続はユーザー操作が必要なので、トップバーのボタンで行う。
+    // ══════════════════════════════
+    let pendingEditorTrack = null;
+    let pendingEditorWorkId = null;
+    let restoreHandle = null;   // 保存しておいた作品フォルダのハンドル（クリック時に許可を取り直せる）
+
+    // IndexedDB に保存した 'work-dir' から {workId, dirHandle} を取り出す。
+    // ハンドルそのものだけ保存していた古いバージョンでも読めるようにしておく。
+    function readWorkDirRecord(rec) {
+      if (!rec) return null;
+      if (rec.kind === 'directory') return { workId: null, dirHandle: rec };
+      if (rec.dirHandle && rec.dirHandle.kind === 'directory') return { workId: rec.workId || null, dirHandle: rec.dirHandle };
+      return null;
+    }
+
+    async function restoreAfterEditorReturn() {
+      const workId = window._editorReturnWork;
+      pendingEditorTrack  = window._editorReturnTrack || null;
+      pendingEditorWorkId = workId || null;
+      const showFolderBtn = () => {
+        if (supportsFileSystemAccess) document.getElementById('restoreFolderBtn').style.display = '';
+        else pendingEditorTrack = null;   // Android はフォルダを自分で選び直すので、待ち状態を作らない
+      };
+      if (!workId || !library[workId]) { showFolderBtn(); return; }
+      selectWork(workId);   // 作品とトラック一覧を選ぶ（未読込のトラックは「未読込」で並ぶ）
+
+      const rec = readWorkDirRecord(await loadFileFromIDB('work-dir').catch(() => null));
+      const folderName = library[workId].folderName;
+      // 別作品のハンドルが残っていることがあるので、その作品のものだと分かる場合だけ使う
+      if (rec && (rec.workId === workId || (!rec.workId && rec.dirHandle.name === folderName))) {
+        restoreHandle = rec.dirHandle;
+        try {
+          const perm = await rec.dirHandle.queryPermission({ mode: 'readwrite' });
+          if (perm === 'granted') { await rescanRestoredFolder(rec.dirHandle); return; }
+        } catch(e) { console.warn('保存したフォルダの読み直しに失敗:', e); }
+        // 許可が 'prompt' / 'denied' のときもハンドルは残す。ボタンを押したとき（ユーザー操作）に
+        // requestPermission で取り直せば、同じフォルダを選び直す必要がない。
+        // ここを null にすると、その取り直しは一度も走らず、毎回フォルダ選択窓になる。
+      } else {
+        // レコードが無い／別作品のハンドルなので使わない（D&DやAndroidで追加した作品はここに来る）
+        restoreHandle = null;
+      }
+      // 自動では読み直せないので、ワンクリックでフォルダを選ぶボタンを出す
+      showFolderBtn();
+    }
+
+    // 作品フォルダを読み直し、トラック一覧・編集CSV・選んでいたトラックまで復元する
+    async function rescanRestoredFolder(dirHandle) {
+      await scanDirHandle(dirHandle, dirHandle.name, null, true);   // 読み直しでは同じ警告を繰り返さない
+      rootDirHandle = dirHandle;   // 「＋フォルダを追加」と同じ状態にして、フォルダのリネーム・削除を使えるようにする
+      applyAllCsvEdits();          // スキャンでディスクのCSVが読まれた後に編集内容を上書きし直す
+      // トラック一覧はスキャン前に作っているので、読み込みが終わった時点で作り直す。
+      // 作り直さないと「未読込」表示のまま残り、読み終わったトラックを押しても
+      // 「まだ読み込まれていません」と誤って弾される。CSVバッジの表示も正しくなる。
+      // autoLoad=false: 一覧だけ作り直す。先頭トラックを勝手に読むと、そのCSV読み込みが
+      // 後から解決して、開くはずのトラックの schedule（BLEの動作・マーカー）が別のものになる。
+      // 復元中にユーザーが別作品を選んでいた場合は、その選択を元に戻さない。
+      if (pendingEditorWorkId && currentWorkId === pendingEditorWorkId && library[pendingEditorWorkId]) {
+        selectWork(pendingEditorWorkId, false);
+      }
+      restorePendingTrack();
+      // 復元はここで終わり。待ち状態とハンドルを残したままだと、後に「＋ フォルダを追加」で
+      // 同じ作品を読み直したとき、古いトラックを勝手に開いて選択を書き換えてしまう。
+      pendingEditorTrack = null; pendingEditorWorkId = null; restoreHandle = null;
+    }
+
+    function restorePendingTrack() {
+      const base = pendingEditorTrack;
+      pendingEditorTrack = null;
+      if (!base) return;
+      // 読み直し中にユーザーが別作品を選んだ場合、このトラックはその作品のものではない
+      if (currentWorkId !== pendingEditorWorkId) { console.warn('別の作品を選んだので、編集していたトラックの復元はやめました'); return; }
+      if (mediaFiles[base]) loadTrack(base);
+    }
+
+    // 許可が切れていたときの復元（クリック＝ユーザー操作なのでフォルダ選択とpermissionが使える）
+    async function pickFolderForRestore() {
+      const btn = document.getElementById('restoreFolderBtn');
+      btn.disabled = true; btn.textContent = '読み込み中…';
+      try {
+        // 同じフォルダのハンドルが残っていれば、まずそこで許可を取り直す（選び直しは不要で失敗しにくい）
+        let dirHandle = null;
+        if (restoreHandle) {
+          try {
+            if (await restoreHandle.requestPermission({ mode: 'readwrite' }) === 'granted') dirHandle = restoreHandle;
+          } catch(e) { console.warn('保存していたフォルダの許可を取り直せませんでした:', e); }
+        }
+        if (!dirHandle) dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        await rescanRestoredFolder(dirHandle);
+        document.getElementById('restoreFolderBtn').style.display = 'none';
+      } catch(e) {
+        if (e && e.name !== 'AbortError') alert('フォルダの読み込みに失敗しました: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = 'フォルダを読み込む';
+      }
+    }
+    document.getElementById('restoreFolderBtn').addEventListener('click', pickFolderForRestore);
 
     // ══════════════════════════════
     //  UI
@@ -1746,7 +2112,7 @@
 
     function toggleMode() {
       const btn=document.getElementById('modeBtn');
-      const modes=['CSV モード','ランダム','波形連動'];
+      const modes=['CSV モード','ランダム（未実装）','波形連動（未実装）'];
       let idx=modes.indexOf(btn.textContent.trim());
       idx=(idx+1)%modes.length;
       btn.textContent=modes[idx];
@@ -1756,13 +2122,22 @@
     // ══════════════════════════════
     //  初期化
     // ══════════════════════════════
-    // 編集画面から戻ってきた場合は接続画面をスキップ
-    if (sessionStorage.getItem('editor-work-id')) {
+    // 編集画面から戻ってきた場合は接続画面をスキップし、機器が切れていることを明示する
+    // （ページを移動するとGATT接続も切れる。再接続にはユーザー操作が必要なのでボタンで行う）
+    const returningFromEditor = !!sessionStorage.getItem('editor-work-id');
+    if (returningFromEditor) {
+      window._editorReturnWork  = sessionStorage.getItem('editor-work-id');
+      window._editorReturnTrack = sessionStorage.getItem('editor-track') || '';
       sessionStorage.removeItem('editor-work-id');
+      sessionStorage.removeItem('editor-track');
       document.getElementById('connect-screen').classList.add('hidden');
+      showDisconnected('編集画面から戻りました — 機器は切断中です');
     }
     loadLibraryFromStorage();
+    restoreUIPreferences();
+    applyAllCsvEdits();
     renderLibrarySidebar();
+    if (returningFromEditor) restoreAfterEditorReturn().catch(e => console.warn('編集画面からの復元に失敗しました:', e));
   </script>
 </body>
 </html>
