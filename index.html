@@ -1126,6 +1126,7 @@
         // 右クリックメニュー（作品行）
         div.addEventListener('contextmenu', (e) => {
           e.preventDefault();
+          e.stopPropagation();   // document 側の「どこか右クリックで閉じる」が同じイベントで走って即消えるのを防ぐ
           const items = [
             { label: '情報を編集', action: () => { currentWorkId=w.id; openEditMeta(); } },
           ];
@@ -1274,6 +1275,7 @@
         // 右クリックメニュー
         div.addEventListener('contextmenu', (e) => {
           e.preventDefault();
+          e.stopPropagation();   // 上と同じ理由（メニューが作られた直後に閉じるのを防ぐ）
           const items = [{ label: 'CSVを編集', action: () => { currentTrack=t.base; openCsvSelect(); } }];
           if (hasCsvEdit(t.base)) items.push({ separator: true }, { label: '編集CSVの反映を取り消す', action: () => { clearCsvEdit(t.base); renderLibrarySidebar(); } });
           showContextMenu(e.clientX, e.clientY, items);
