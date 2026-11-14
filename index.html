@@ -1648,6 +1648,10 @@
     // ══════════════════════════════
     const ctxMenu = document.getElementById('ctx-menu');
     document.addEventListener('click', () => ctxMenu.classList.remove('show'));
+    // メニューを出す側の contextmenu ハンドラは e.stopPropagation() を付けること。
+    // ここまでイベントがバブルすると、作って .show を付けた直後にここで閉じて消える。
+    // （document 側を capture フェーズで閉じる形にすれば要素側の stopPropagation は不要になるが、
+    //   メニューの上を右クリックしたときの挙動が変わるので現行のままにする）
     document.addEventListener('contextmenu', () => ctxMenu.classList.remove('show'));
 
     function showContextMenu(x, y, items) {
