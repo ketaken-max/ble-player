@@ -563,13 +563,48 @@
     // ══════════════════════════════
     //  CSV
     // ══════════════════════════════
+    // 区切りは半角・全角カンマの両方を受け取る。判定側と解析側で扱いが違うと、
+    // 全角カンマで書いたCSVが全行「読めない行」になって全部捨てられてしまう。
+    function splitCsvLine(line) { return line.split(/[,，]/).map(s => s.trim()); }
+
+    // 先頭行がヘッダ行かデータ行かを見分ける（index.html と同じ判定）。
+    // 「数値 + カンマで始まるか」だけでは "abc,0,50" のような壊れたデータ行を
+    // ヘッダとして黙って捨ててしまうので、どれかの欄が数値ならデータ行と見なす。
+    // 本物のヘッダ（time_ms,direction,strength / 時間,方向,強さ）はどの欄も数値にならない。
+    function isCsvHeaderLine(line) {
+      return splitCsvLine(line).every(p => p === '' || !Number.isFinite(Number(p)));
+    }
+
     function parseCSV(text) {
-      const lines = text.trim().split('\n').slice(1);
-      schedule = lines.map(line => {
-        const [time_ms,direction,strength] = line.split(',').map(s=>s.trim());
-        return { time_ms:parseInt(time_ms), direction:parseInt(direction), strength:parseInt(strength) };
-      }).filter(r=>!isNaN(r.time_ms));
+      // 改行は CR LF・LF・CR すべてで分ける（旧 Mac 形式の CR だけのファイルを 1行として扱うと、
+      // 全部の行を「読めない行」にになってしまう）
+      const lines = text.split(/\r\n|\r|\n/).map(l => l.trim()).filter(l => l);
+      if (lines.length && isCsvHeaderLine(lines[0])) lines.shift();   // 先頭がヘッダなら捨てる（そうでない場合は残す）
+      let bad = 0;      // 捨てた行
+      let fixed = 0;    // 強さを読めない値から 0 に直した行
+      schedule = [];
+      lines.forEach(line => {
+        const parts = splitCsvLine(line);
+        // 空欄は 0 と数えられないようにする（Excel はデータの下に空行を ",," で保存することがある）。
+        // Number("") は 0 になるので、このチェックを足す前は空行が t=0 の指令として残っていた。
+        const t = Number(parts[0]);
+        if (parts[0] === '' || !Number.isInteger(t) || t < 0) { bad++; return; }
+        let s = Number(parts[2]);
+        // 数値でない・空の強さは 0 として扱う（欄が無い行と同じ扱いにして件数に含める）
+        if (parts[2] === '' || !Number.isFinite(s)) { fixed++; s = 0; }
+        schedule.push({
+          time_ms: t,
+          direction: Number(parts[1]) === 1 ? 1 : 0,        // 0/1 以外は右(0)として扱う
+          strength: Math.max(0, Math.min(100, Math.round(s)))  // 0〜100 に収める
+        });
+      });
       schedule.sort((a,b)=>a.time_ms-b.time_ms);
+      if (bad || fixed) {
+        const msgs = [];
+        if (bad) msgs.push(bad + ' 行は読めないため飛ばしました');
+        if (fixed) msgs.push(fixed + ' 行の強さは 0 に直しました');
+        alert(msgs.join(' / ') + '（各行は time_ms,direction,strength の形・整数で書いてください）');
+      }
     }
 
     function toCSVText() {

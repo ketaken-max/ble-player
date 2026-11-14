@@ -409,9 +409,23 @@
       isBleBusy = true;
       // 応答なし送信（WithoutResponse）でパケットを最速処理
       bleChar.writeValueWithoutResponse(new Uint8Array(cmd))
-        .then(() => { pendingCommand = null; lastCommand = cmd; keepAliveWarned = false; })
+        .then(() => {
+          // 送信中に新しいコマンドが積まれていたらそれは残す。無条件に消すと、
+          // 停止や方向変更が一度も送られず、機器が古い動きを維持し続ける。
+          if (pendingCommand === cmd) pendingCommand = null;
+          lastCommand = cmd; keepAliveWarned = false;
+        })
         .catch(e => console.warn('BLE送信エラー:', e))
-        .finally(() => { isBleBusy = false; });
+        .finally(() => {
+          isBleBusy = false;
+          // 「積み上げず最新だけ送る」仕様はそのまま、書き込みが終わった直後に最新を流す。
+          // ただし積まれた「新しい」コマンドだけにする。失敗したコマンド自身をすぐにまた送ると、
+          // 切断済みのGATTへの書き込みが即 NetworkError で reject される状態では
+          // write → reject → re-flush が間隔なしに無限に回って（gattserverdisconnected が
+          // bleChar を消す前に抜けられないため）ページが止まりログが溢れる。
+          // 失敗したコマンドは従来のとおり維持パケット（5秒）か次のコマンドに任せる。
+          if (pendingCommand && pendingCommand !== cmd) flushPendingCommand();
+        });
       return true;
     }
 
@@ -481,6 +495,9 @@
           if (!keepAliveWarned) { keepAliveWarned = true; console.warn('維持パケットの送信に失敗:', e); }
         } finally {
           isBleBusy = false;
+          // 維持パケットを書いている間に積まれたコマンド（一時停止の停止コマンドや
+          // CSVの方向・強さの変化）を、次のtick（最大5秒）まで待たせない
+          flushPendingCommand();
         }
       }, 5000);
     }
@@ -549,11 +566,10 @@
           
           // 再度タイマーを起動し、切れる直前の状態を機器に送り直す
           startWindowsKeepAlive();
-          if (!flushPendingCommand() && lastCommand && bleChar) {
-            // 切断前に送信が詰まっていなかった場合は、最後のコマンドをそのまま送り直す
-            bleChar.writeValueWithoutResponse(new Uint8Array(lastCommand))
-              .catch(e => console.warn('復帰時の再送に失敗:', e));
-          }
+          // 積まれたコマンドがあればそれを優先し、無いときだけ最後のコマンドを再送する。
+          // 直接 writeValueWithoutResponse を呼ぶと isBleBusy を素通りして二重送信になる。
+          if (!pendingCommand && lastCommand) pendingCommand = lastCommand.slice();
+          flushPendingCommand();
           
           document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 復帰済';
           document.getElementById('bleDot').classList.remove('disconnected');
@@ -1555,6 +1571,20 @@
     });
     if (document.hidden) enableHiddenTicker();
 
+    // 区切りは半角・全角カンマの両方を受け取る。判定側と解析側で扱いが違うと、
+    // 全角カンマで書いたCSVが全行「読めない行」になって全部捨てられてしまう。
+    function splitCsvLine(line) { return line.split(/[,，]/).map(s => s.trim()); }
+
+    // 先頭行がヘッダ行かデータ行かを見分ける（editor.html と同じ判定）。
+    // 「数値 + カンマで始まるか」だけでは "abc,0,50" のような壊れたデータ行を
+    // ヘッダとして黙って捨ててしまうので、どれかの欄が数値ならデータ行と見なす。
+    // 本物のヘッダ（time_ms,direction,strength / 時間,方向,強さ）はどの欄も数値にならない。
+    function isCsvHeaderLine(line) {
+      return splitCsvLine(line).every(p => p === '' || !Number.isFinite(Number(p)));
+    }
+
+    let csvWarnKey = '';   // 同じ内容のCSVで同じ警告を繰り返し出さないための指紋
+
     function loadCSV(file, base) {
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -1562,17 +1592,43 @@
         // 捨てないと、前のトラックのCSVが後から解決して schedule（BLEの動作とタイムラインの
         // マーカー）とサムネイルが別のトラックのものになる。
         if (base && base !== currentTrack) return;
-        const lines = e.target.result.replace(/\r/g, '').trim().split('\n').slice(1);
-        schedule = lines.map(line => {
-          const [time_ms,direction,strength] = line.split(',').map(s=>s.trim());
-          const t = parseInt(time_ms);
-          if (isNaN(t) || t < 0) return null;
-          return {
+        const lines = e.target.result.split(/\r\n|\r|\n/).map(l => l.trim()).filter(l => l);
+        if (lines.length && isCsvHeaderLine(lines[0])) lines.shift();   // 先頭がヘッダなら捨てる（そうでない場合は残す）
+        let bad = 0;      // 捨てた行
+        let fixed = 0;    // 強さを読めない値から 0 に直した行
+        schedule = [];
+        lines.forEach(line => {
+          const parts = splitCsvLine(line);
+          // 空欄は 0 と数えられないようにする（Excel はデータの下に空行を ",," で保存することがある）。
+          // Number("") は 0 になるので、このチェックを足す前は空行が t=0 の指令として残っていた。
+          const t = Number(parts[0]);
+          if (parts[0] === '' || !Number.isInteger(t) || t < 0) { bad++; return; }
+          let s = Number(parts[2]);
+          // 数値でない・空の強さは 0 として扱う（欄が無い行と同じ扱いにして件数に含める）
+          if (parts[2] === '' || !Number.isFinite(s)) { fixed++; s = 0; }
+          schedule.push({
             time_ms: t,
-            direction: parseInt(direction) === 1 ? 1 : 0,
-            strength: Math.max(0, Math.min(100, parseInt(strength) || 0))
-          };
-        }).filter(Boolean).sort((a,b) => a.time_ms - b.time_ms);
+            direction: Number(parts[1]) === 1 ? 1 : 0,          // 0/1 以外は右(0)として扱う
+            strength: Math.max(0, Math.min(100, Math.round(s)))  // 0〜100 に収める
+          });
+        });
+        schedule.sort((a,b) => a.time_ms - b.time_ms);
+        if (bad || fixed) {
+          // 同じCSVを何度選び直しても同じ警告を繰り返さないようにする。
+          // alert は同期的なので、出ている間は rAF もタイムライン描画もBLE送信も止まる。
+          // 内容の指紋と同じ壊れ方の組み合わせで1回だけ出す（別のファイルや別の壊れ方なら再度出る）。
+          const src = e.target.result;
+          let h = 0;
+          for (let i = 0; i < src.length; i++) h = (h * 31 + src.charCodeAt(i)) | 0;
+          const warnKey = h + ':' + bad + ':' + fixed;
+          if (warnKey !== csvWarnKey) {
+            csvWarnKey = warnKey;
+            const msgs = [];
+            if (bad) msgs.push(bad + ' 行は読めないため飛ばしました');
+            if (fixed) msgs.push(fixed + ' 行の強さは 0 に直しました');
+            alert(msgs.join(' / ') + '（各行は time_ms,direction,strength の形・整数で書いてください）');
+          }
+        }
         lastSentIndex = -1;
         // pendingCommand は消さない。トラック切替で sendStop() が積んだ停止を
         // 消してしまうと、機器が前トラックの動きを維持したまま次に入る。
@@ -1583,6 +1639,8 @@
           player.addEventListener('loadedmetadata', renderTimeline, {once:true});
         }
       };
+      // FSAの許可が切れたときなどに、理由も出さずにマーカーだけ消えるのを防ぐ
+      reader.onerror = () => alert('CSV を読み込めませんでした。「＋ フォルダを追加」でフォルダをもう一度選んでください。');
       reader.readAsText(file);
     }
 
@@ -1648,11 +1706,12 @@
     // ══════════════════════════════
     const ctxMenu = document.getElementById('ctx-menu');
     document.addEventListener('click', () => ctxMenu.classList.remove('show'));
-    // メニューを出す側の contextmenu ハンドラは e.stopPropagation() を付けること。
-    // ここまでイベントがバブルすると、作って .show を付けた直後にここで閉じて消える。
-    // （document 側を capture フェーズで閉じる形にすれば要素側の stopPropagation は不要になるが、
-    //   メニューの上を右クリックしたときの挙動が変わるので現行のままにする）
-    document.addEventListener('contextmenu', () => ctxMenu.classList.remove('show'));
+    // 常に「古いメニューを閉じる → その後に行などのハンドラが新しいメニューを出す」という順序にする。
+    // document 側を capture フェーズで閉じると、capture は要素のハンドラより先に走るため、
+    // メニューを出す側の contextmenu ハンドラは e.stopPropagation() を意識しなくても
+    // 「作った直後に消える」状態にならない（忘れただけで同じバグが再発する）。
+    // メニューの上を右クリックしたときに閉じる挙動は従来と同じまま。
+    document.addEventListener('contextmenu', () => ctxMenu.classList.remove('show'), true);
 
     function showContextMenu(x, y, items) {
       ctxMenu.innerHTML = '';
