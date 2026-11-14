@@ -433,6 +433,8 @@
         // ★ 接続がすべて成功したあとに、対策Bのタイマーを起動する
         startWindowsKeepAlive();
 
+        // 再接続ごとに同じ device へ再購読すると onDisconnected が二重に走るため、先に外す
+        bleDevice.removeEventListener('gattserverdisconnected', onDisconnected);
         bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
         enterMain(bleDevice.name || 'UFO SA');
       } catch(e) {
@@ -508,7 +510,11 @@
           
           // 再度タイマーを起動し、切れる直前の状態を機器に送り直す
           startWindowsKeepAlive();
-          flushPendingCommand();
+          if (!flushPendingCommand() && lastCommand && bleChar) {
+            // 切断前に送信が詰まっていなかった場合は、最後のコマンドをそのまま送り直す
+            bleChar.writeValueWithoutResponse(new Uint8Array(lastCommand))
+              .catch(e => console.warn('復帰時の再送に失敗:', e));
+          }
           
           document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 復帰済';
           console.log('Windows対策: 自動高速再接続に成功しました！');
@@ -569,9 +575,40 @@
     function clearCsvEdit(base) {
       const edits = loadCsvEdits(); delete edits[base];
       localStorage.setItem(CSV_EDIT_KEY, JSON.stringify(edits));
-      if (csvFiles[base]) delete csvFiles[base];
+      // 元ファイルが残っていればそこへ戻す（残っていない場合は未割当になる）
+      if (originalCsv[base]) {
+        csvFiles[base] = originalCsv[base];
+        if (originalCsv[base]._handle) csvHandles[base] = originalCsv[base]._handle;
+      } else {
+        delete csvFiles[base]; delete csvHandles[base];
+      }
+      refreshCsvBadges();
+    }
+    // 再生画面のトラック一覧のCSVバッジを作り直す（作品を選び直さずに反映する）
+    function refreshCsvBadges() {
+      document.querySelectorAll('#tracksEl .track').forEach(el => {
+        const base = el.dataset.base;
+        const badge = el.querySelector('.csv-badge');
+        if (!base || !badge) return;
+        const has = !!csvFiles[base];
+        badge.textContent = has ? 'CSV' : '未割当';
+        badge.classList.toggle('missing', !has);
+      });
     }
     function hasCsvEdit(base) { return typeof loadCsvEdits()[base] === 'string'; }
+    // トラック名を変更したら、保存済みの編集CSVのキーも引っ越しする
+    function renameCsvEditKey(from, to) {
+      const edits = loadCsvEdits();
+      if (typeof edits[from] !== 'string') return;
+      edits[to] = edits[from]; delete edits[from];
+      localStorage.setItem(CSV_EDIT_KEY, JSON.stringify(edits));
+    }
+    function dropCsvEditKey(base) {
+      const edits = loadCsvEdits();
+      if (!(base in edits)) return;
+      delete edits[base];
+      localStorage.setItem(CSV_EDIT_KEY, JSON.stringify(edits));
+    }
     // ライブラリにあるトラックについて、保存済みの編集CSVを反映する
     function applyAllCsvEdits() {
       Object.values(library).forEach(w => {
@@ -621,7 +658,7 @@
         }
         const count = Object.keys(normalized).length;
         if (!count) { alert('有効な作品エントリーがありませんでした'); return; }
-        if (!confirm(`現在のライブラリ（${Object.keys(library).length}件）に ${count} 件を統合します。同じフォルダ名の作品は読み込んだ内容で上書きされます。\nよければ OK を選んでください。`)) return;
+        if (!confirm(`現在のライブラリ（${Object.keys(library).length}件）に ${count} 件を統合します。同じIDの作品は読み込んだ内容で上書きされます（フォルダ名が同じでもIDが違えば別作品として追加されます）。\nよければ OK を選んでください。`)) return;
         library = { ...library, ...normalized };
         saveLibraryToStorage(); applyAllCsvEdits(); renderLibrarySidebar();
         alert(`${count} 件を読み込みました`);
@@ -633,6 +670,7 @@
     //  ファイル管理
     // ══════════════════════════════
     let mediaFiles = {}, csvFiles = {};
+    const originalCsv = {};   // フォルダ由来のCSV（編集CSVを解除したときに戻す）
     let pendingFolders = [], currentMetaIndex = 0, editingWorkId = null;
 
     // File System Access API対応判定
@@ -833,12 +871,13 @@
         const csvBase = csvMapping[mb];
         if (csvBase) {
           csvFiles[mb] = folderCsv[csvBase];
+          originalCsv[mb] = folderCsv[csvBase];   // 「編集CSVの解除」で戻すための元ファイル
           // File System Access APIのハンドルをキャッシュ
           if (folderCsv[csvBase]?._handle) csvHandles[mb] = folderCsv[csvBase]._handle;
         } else {
           // 同じ base 名が別のフォルダで先に読まれたとき、前のフォルダのCSVを残さない
           // （残ると、このフォルダにCSVが無いトラックへ前のフォルダのCSVがそのまま当たってしまう）
-          delete csvFiles[mb]; delete csvHandles[mb];
+          delete csvFiles[mb]; delete csvHandles[mb]; delete originalCsv[mb];
         }
         // このブラウザに保存された編集CSVがあれば、フォルダ内のCSVより優先する
         applyCsvOverride(mb);
@@ -1168,7 +1207,8 @@
         const isLoaded  = !!mediaFiles[t.base];
         const div = document.createElement('div');
         div.className = 'track' + (i===0?' active':'') + (isLoaded?'':' unloaded');
-        div.innerHTML = `<span>${String(i+1).padStart(2,'0')}. ${t.base}</span><span class="csv-badge ${hasCSV?'':'missing'}">${hasCSV?'CSV':'未割当'}</span>`;
+        div.dataset.base = t.base;
+        div.innerHTML = `<span>${String(i+1).padStart(2,'0')}. ${esc(t.base)}</span><span class="csv-badge ${hasCSV?'':'missing'}">${hasCSV?'CSV':'未割当'}</span>`;
         div.addEventListener('click', () => {
           if (!isLoaded) { alert('このトラックのファイルはまだ読み込まれていません。「＋ フォルダを追加」でフォルダをもう一度選択してください。'); return; }
           loadTrack(t.base);
@@ -1197,6 +1237,8 @@
       player.pause();
       document.getElementById('playBtn').textContent = '▶';
       sendStop();
+      // 前のトラックのマーカーが残ったまま新トラックの再生位置を照合しないようにする
+      schedule = []; lastSentIndex = -1;
       playCounted = false;
       if (mediaBlobURL) { URL.revokeObjectURL(mediaBlobURL); mediaBlobURL = null; }
       currentTrack      = base;
@@ -1204,7 +1246,7 @@
       const file = mediaFiles[base];
       if (!file) return;
       document.querySelectorAll('.track').forEach(t => {
-        t.classList.toggle('active', t.querySelector('span').textContent.includes(base));
+        t.classList.toggle('active', t.dataset.base === base);
       });
 
       // MIME type が空（FSA/webkitdirectoryで付かないことがある）でも判るように拡張子を優先する
@@ -1279,7 +1321,7 @@
       const videoWrap = document.getElementById('video-wrap');
       thumbnailEl = document.createElement('div');
       thumbnailEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--text-dim);';
-      thumbnailEl.innerHTML = '<div style="font-size:64px;opacity:.4;">♪</div><div style="font-size:12px;font-family:\'JetBrains Mono\',monospace;">' + (currentTrack||'') + '</div>';
+      thumbnailEl.innerHTML = '<div style="font-size:64px;opacity:.4;">♪</div><div style="font-size:12px;font-family:\'JetBrains Mono\',monospace;">' + esc(currentTrack||'') + '</div>';
       videoWrap.appendChild(thumbnailEl);
     }
 
@@ -1420,14 +1462,38 @@
     // ══════════════════════════════
     let schedule=[], lastSentIndex=-1;
     let scheduleTickerId = null;
+    let hiddenTickerBound = false, hiddenTickerTimer = null;
+
+    function tickSchedule() {
+      if (!schedule.length || player.paused || !player.duration) return;
+      processBLESchedule(player.currentTime * 1000);
+    }
 
     // timeupdate は約4Hzしか来ないため、rAFで再生位置を照合する（time_ms はミリ秒）
     function scheduleTicker() {
       scheduleTickerId = requestAnimationFrame(scheduleTicker);
-      if (!schedule.length || player.paused || !player.duration) return;
-      processBLESchedule(player.currentTime * 1000);
+      tickSchedule();
     }
     scheduleTickerId = requestAnimationFrame(scheduleTicker);
+
+    // rAF は見えないタブでは走らない。画面オフ・タブ裏化での再生中にコマンドが
+    // 止まらないように、隠れている間だけ timeupdate と1秒間隔のタイマーで照合する。
+    function enableHiddenTicker() {
+      if (hiddenTickerBound) return;
+      hiddenTickerBound = true;
+      player.addEventListener('timeupdate', tickSchedule);
+      hiddenTickerTimer = setInterval(tickSchedule, 1000);
+    }
+    function disableHiddenTicker() {
+      if (!hiddenTickerBound) return;
+      hiddenTickerBound = false;
+      player.removeEventListener('timeupdate', tickSchedule);
+      if (hiddenTickerTimer) { clearInterval(hiddenTickerTimer); hiddenTickerTimer = null; }
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) enableHiddenTicker(); else disableHiddenTicker();
+    });
+    if (document.hidden) enableHiddenTicker();
 
     function loadCSV(file) {
       const reader = new FileReader();
@@ -1443,7 +1509,9 @@
             strength: Math.max(0, Math.min(100, parseInt(strength) || 0))
           };
         }).filter(Boolean).sort((a,b) => a.time_ms - b.time_ms);
-        lastSentIndex = -1; pendingCommand = null;
+        lastSentIndex = -1;
+        // pendingCommand は消さない。トラック切替で sendStop() が積んだ停止を
+        // 消してしまうと、機器が前トラックの動きを維持したまま次に入る。
         // durationが既に取得済みならすぐ描画、まだならloadedmetadataを待つ
         if (player.readyState >= 1 && player.duration) {
           renderTimeline();
@@ -1637,7 +1705,9 @@
         mediaOrigin[newName] = mediaOrigin[base];
         delete mediaFiles[base]; delete mediaOrigin[base];
         if (csvFiles[base])  { csvFiles[newName]  = csvFiles[base];  delete csvFiles[base]; }
+        if (originalCsv[base]) { originalCsv[newName] = originalCsv[base]; delete originalCsv[base]; }
         if (csvHandles[base]){ csvHandles[newName] = csvHandles[base]; delete csvHandles[base]; }
+        renameCsvEditKey(base, newName);
 
         // ライブラリ更新
         updateTrackBase(workId, base, newName);
@@ -1659,8 +1729,9 @@
           await parentHandle.removeEntry(csvFiles[base].name).catch(()=>{});
         }
 
-        delete mediaFiles[base]; delete mediaOrigin[base];
+        delete mediaFiles[base]; delete mediaOrigin[base]; delete originalCsv[base];
         delete csvFiles[base]; delete csvHandles[base];
+        dropCsvEditKey(base);
         removeTrackFromWork(workId, base);
         saveLibraryToStorage();
         renderLibrarySidebar();

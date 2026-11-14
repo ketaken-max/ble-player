@@ -294,9 +294,12 @@
   </div>
 
   <script>
-    // ══════════════════════════════
-    //  状態
-    // ══════════════════════════════
+      // HTMLに差し込む文字列（ファイル名・パターン名など）をエスケープする
+      const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+      // ══════════════════════════════
+      //  状態
+      // ══════════════════════════════
     let schedule  = [];
     let undoStack = [];
     let patterns  = {};
@@ -601,8 +604,9 @@
         }
       }
 
-      if (hasFSA && !hasHandle) {
-        // 新規作成：File System Access APIでファイルを作成
+      if (hasFSA) {
+        // 新規作成、またはハンドルを取得できなかった場合：File System Access APIでファイルを作成する
+        // （ハンドル取得に失敗したときにブラウザ内保存へ落ちると、PCで誤って「編集済」になる）
         try {
           const handle = await window.showSaveFilePicker({
             suggestedName: csvName,
@@ -741,7 +745,7 @@
       keys.forEach(key=>{
         const div=document.createElement('div');
         div.className='pattern-item';
-        div.innerHTML=`<span class="p-name">${key}</span><span class="p-count">${patterns[key].length}行</span><button class="pattern-del">✕</button>`;
+        div.innerHTML=`<span class="p-name">${esc(key)}</span><span class="p-count">${patterns[key].length}行</span><button class="pattern-del">✕</button>`;
         div.addEventListener('click',(e)=>{ if(e.target.classList.contains('pattern-del')) return; applyPattern(key); });
         div.querySelector('.pattern-del').addEventListener('click',(e)=>{ e.stopPropagation(); deletePattern(key); });
         list.appendChild(div);
