@@ -421,7 +421,8 @@
         .catch(e => {
           if (my !== writeSeq) return;
           // 維持パケットは5秒ごとに失敗し続けるので、無間引きだとログが溢れる。
-          // 失敗している間は1回だけ出して、成功したときに解く（復帰後の新しい失敗は出る）。
+          // 失敗している間は1回だけ出し、送信成功・維持パケットの成功・切断のいずれでも解く
+          // （onDisconnected にも解除がある）。なので、復旧後の新しい失敗は必ず出る。
           if (!bleWarned) { bleWarned = true; console.warn('BLE送信エラー:', e); }
         })
         .finally(() => {
@@ -928,6 +929,10 @@
       files.forEach(file => {
         const ext  = file.name.split('.').pop().toLowerCase();
         const base = file.name.replace(/\.[^.]+$/, '');
+        // 拡張子だけの名前（.mp4 など）は base が空になる。アプリはトラックを base で管理するので、
+        // 空のキーのトラックでは「どのトラックか」が判別できない（CSVの警告の指紋も空になり、
+        // 別の空名トラックと同じ抑止を共有してしまう）ので、最初から読まない。
+        if (!base) return;
         if (AUDIO_EXT.includes(ext) || VIDEO_EXT.includes(ext)) {
           // 同じフォルダ内で base 名が重複している（拡張子が違う）場合は後勝ちになる
           if (folderMedia[base]) sameFolderDup.push(`${folderMedia[base].name} と ${file.name}`);

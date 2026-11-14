@@ -708,7 +708,7 @@
         applyBtn.onclick=()=>{ if (applyMirror()) modal.classList.add('hidden'); };
       } else if (type==='repeat') {
         title.textContent='繰り返し';
-        fields.innerHTML=`<div class="process-field"><label>繰り返し回数</label><input class="process-input" type="number" id="repeatCount" min="2" value="2"></div><div class="process-field"><label>間隔（秒）</label><input class="process-input" type="number" id="repeatInterval" min="0" step="0.1" value="0"></div>`;
+        fields.innerHTML=`<div class="process-field"><label>繰り返し回数</label><input class="process-input" type="number" id="repeatCount" min="2" max="1000" value="2"></div><div class="process-field"><label>間隔（秒）</label><input class="process-input" type="number" id="repeatInterval" min="0" step="0.1" value="0"></div>`;
         applyBtn.onclick=()=>{ if (applyRepeat()) modal.classList.add('hidden'); };
       } else if (type==='fadein') {
         title.textContent='フェードイン';
@@ -738,14 +738,21 @@
 
     function applyRepeat() {
       if (!schedule.length) { alert('CSVが空です'); return true; }   // 理由を伝えて窓は閉じる（他のツールと同じ）
-      // input の min はブラウザのチェック（form submit など）にしか効かないので、ここでも弾く。
+      // input の min/max はブラウザのチェック（form submit など）にしか効かないので、ここでも弾く。
       // 負の間隔を通すとオフセットが負になり、「繰り返して増やした行」の時間が負になることがある。
       // そうすると保存した次の読み込みで「読めない行」として落ち、増えたはずの行が消える。
       // 0 は「余白なしで連続して並べる」を表す従来の書き方なので、そのまま許す。
       // parseInt は "3.9" を 3 に、"2e3" を 2 に黙って丸めるので、ここでは Number で整数判定する。
-      const countRaw = Number(document.getElementById('repeatCount').value);
-      const intervalRaw = Number(document.getElementById('repeatInterval').value);
+      // 空欄は Number('') が 0 になってしまうので、値を読む前に空かどうかを見る（未入力と 0 を混ぜない）。
+      const countStr = document.getElementById('repeatCount').value.trim();
+      const intervalStr = document.getElementById('repeatInterval').value.trim();
+      if (countStr === '') { alert('繰り返しの回数を入力してください。'); return false; }
+      if (intervalStr === '') { alert('間隔（秒）を入力してください。余白なしで並べたいときは 0 と書いてください。'); return false; }
+      const countRaw = Number(countStr);
+      const intervalRaw = Number(intervalStr);
+      // type="number" は指数表記を通すので、上限を見ないと "1e21" がそのままループ回数になる（タブが固まる）。
       if (!Number.isInteger(countRaw) || countRaw < 2) { alert('繰り返しの回数は 2 以上の整数で入力してください。'); return false; }
+      if (countRaw > 1000) { alert('繰り返しの回数は 1000 以下で入力してください（それ以上はこの画面が重くなります）。'); return false; }
       if (!Number.isFinite(intervalRaw) || intervalRaw < 0) { alert('繰り返しの間隔は 0 以上の秒数で入力してください（負の値は増やす行の時刻が負になるので使えません）。'); return false; }
       const count = countRaw;
       const interval = intervalRaw;
@@ -763,8 +770,14 @@
 
     function applyFade(dir) {
       if (!schedule.length) { alert('CSVが空です'); return true; }   // 理由を伝えて窓は閉じる（他のツールと同じ）
-      const startSec=Number(document.getElementById('fadeStart').value);
-      const endSec=Number(document.getElementById('fadeEnd').value);
+      // 空欄は Number('') が 0 になるので、空かどうかを先に見る（未入力を 0 と混ぜると、
+      // 「終了時間は開始時間より大きくしてください」という実際には入力されていないときの
+      // 誤解を招くメッセージが出る）。
+      const startStr = document.getElementById('fadeStart').value.trim();
+      const endStr = document.getElementById('fadeEnd').value.trim();
+      if (startStr === '' || endStr === '') { alert('開始時間と終了時間を入力してください。'); return false; }
+      const startSec=Number(startStr);
+      const endSec=Number(endStr);
       if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) { alert('開始時間と終了時間を数値で入力してください。'); return false; }
       const startMs=Math.round(startSec*1000), endMs=Math.round(endSec*1000);
       if (startMs>=endMs) { alert('終了時間は開始時間より大きくしてください'); return false; }
