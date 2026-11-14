@@ -576,7 +576,9 @@
     }
 
     function parseCSV(text) {
-      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
+      // 改行は CR LF・LF・CR すべてで分ける（旧 Mac 形式の CR だけのファイルを 1行として扱うと、
+      // 全部の行を「読めない行」にになってしまう）
+      const lines = text.split(/\r\n|\r|\n/).map(l => l.trim()).filter(l => l);
       if (lines.length && isCsvHeaderLine(lines[0])) lines.shift();   // 先頭がヘッダなら捨てる（そうでない場合は残す）
       let bad = 0;      // 捨てた行
       let fixed = 0;    // 強さを読めない値から 0 に直した行

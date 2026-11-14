@@ -1706,11 +1706,12 @@
     // ══════════════════════════════
     const ctxMenu = document.getElementById('ctx-menu');
     document.addEventListener('click', () => ctxMenu.classList.remove('show'));
-    // メニューを出す側の contextmenu ハンドラは e.stopPropagation() を付けること。
-    // ここまでイベントがバブルすると、作って .show を付けた直後にここで閉じて消える。
-    // （document 側を capture フェーズで閉じる形にすれば要素側の stopPropagation は不要になるが、
-    //   メニューの上を右クリックしたときの挙動が変わるので現行のままにする）
-    document.addEventListener('contextmenu', () => ctxMenu.classList.remove('show'));
+    // 常に「古いメニューを閉じる → その後に行などのハンドラが新しいメニューを出す」という順序にする。
+    // document 側を capture フェーズで閉じると、capture は要素のハンドラより先に走るため、
+    // メニューを出す側の contextmenu ハンドラは e.stopPropagation() を意識しなくても
+    // 「作った直後に消える」状態にならない（忘れただけで同じバグが再発する）。
+    // メニューの上を右クリックしたときに閉じる挙動は従来と同じまま。
+    document.addEventListener('contextmenu', () => ctxMenu.classList.remove('show'), true);
 
     function showContextMenu(x, y, items) {
       ctxMenu.innerHTML = '';
