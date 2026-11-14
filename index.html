@@ -1126,6 +1126,7 @@
         // 右クリックメニュー（作品行）
         div.addEventListener('contextmenu', (e) => {
           e.preventDefault();
+          e.stopPropagation();   // document 側の「どこか右クリックで閉じる」が同じイベントで走って即消えるのを防ぐ
           const items = [
             { label: '情報を編集', action: () => { currentWorkId=w.id; openEditMeta(); } },
           ];
@@ -1274,6 +1275,7 @@
         // 右クリックメニュー
         div.addEventListener('contextmenu', (e) => {
           e.preventDefault();
+          e.stopPropagation();   // 上と同じ理由（メニューが作られた直後に閉じるのを防ぐ）
           const items = [{ label: 'CSVを編集', action: () => { currentTrack=t.base; openCsvSelect(); } }];
           if (hasCsvEdit(t.base)) items.push({ separator: true }, { label: '編集CSVの反映を取り消す', action: () => { clearCsvEdit(t.base); renderLibrarySidebar(); } });
           showContextMenu(e.clientX, e.clientY, items);
@@ -1646,6 +1648,10 @@
     // ══════════════════════════════
     const ctxMenu = document.getElementById('ctx-menu');
     document.addEventListener('click', () => ctxMenu.classList.remove('show'));
+    // メニューを出す側の contextmenu ハンドラは e.stopPropagation() を付けること。
+    // ここまでイベントがバブルすると、作って .show を付けた直後にここで閉じて消える。
+    // （document 側を capture フェーズで閉じる形にすれば要素側の stopPropagation は不要になるが、
+    //   メニューの上を右クリックしたときの挙動が変わるので現行のままにする）
     document.addEventListener('contextmenu', () => ctxMenu.classList.remove('show'));
 
     function showContextMenu(x, y, items) {
