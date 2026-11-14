@@ -495,30 +495,27 @@
     //  行一覧描画（PC・スマホ両方）
     // ══════════════════════════════
     function renderRows() {
-      const isPC     = window.innerWidth >= 769;
-      const listId   = isPC ? 'row-list-pc' : 'row-list-mobile';
-      const list     = document.getElementById(listId);
-      // 両方クリア
+      // 毎回両方の一覧を作り直す（削除の添字がずれることはない）
       document.getElementById('row-list-pc').innerHTML     = '';
       document.getElementById('row-list-mobile').innerHTML = '';
 
       schedule.forEach((row, i) => {
-        const div = document.createElement('div');
-        div.className = 'csv-row';
-        div.innerHTML = `
-          <span>${row.time_ms}</span>
-          <span><span class="dir-tag d${row.direction}">${row.direction===0?'右(0)':'左(1)'}</span></span>
-          <span>${row.strength}</span>
-          <span><div class="str-bar" style="width:${row.strength}%"></div></span>
-          <button class="del-btn" data-i="${i}">✕</button>`;
-        div.querySelector('.del-btn').addEventListener('click', ()=>deleteRow(i));
-        // PC用の複製にもイベントを付け直す（cloneNode は addEventListener を引き継がない）
-        const pcDiv = div.cloneNode(true);
-        pcDiv.querySelector('.del-btn').addEventListener('click', ()=>deleteRow(i));
-        document.getElementById('row-list-pc').appendChild(pcDiv);
-        const mobileDiv = div.cloneNode(true);
-        mobileDiv.querySelector('.del-btn').addEventListener('click', ()=>deleteRow(i));
-        document.getElementById('row-list-mobile').appendChild(mobileDiv);
+        // cloneNode は addEventListener を引き継がないので、PC用とスマホ用は
+        // それぞれ要素を作り直してイベントを付ける（複製だと✕が効かなかった）
+        const makeRow = () => {
+          const div = document.createElement('div');
+          div.className = 'csv-row';
+          div.innerHTML = `
+            <span>${row.time_ms}</span>
+            <span><span class="dir-tag d${row.direction}">${row.direction===0?'右(0)':'左(1)'}</span></span>
+            <span>${row.strength}</span>
+            <span><div class="str-bar" style="width:${row.strength}%"></div></span>
+            <button class="del-btn">✕</button>`;
+          div.querySelector('.del-btn').addEventListener('click', () => deleteRow(i));
+          return div;
+        };
+        document.getElementById('row-list-pc').appendChild(makeRow());
+        document.getElementById('row-list-mobile').appendChild(makeRow());
       });
     }
 
