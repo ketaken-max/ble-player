@@ -268,13 +268,14 @@
         <button class="tool-btn" onclick="openProcess('repeat')">繰り返し</button>
         <button class="tool-btn" onclick="openProcess('fadein')">フェードイン</button>
         <button class="tool-btn" onclick="openProcess('fadeout')">フェードアウト</button>
+        <button class="tool-btn" onclick="openConvertDsToMs()">1/10秒→ms 変換</button>
         <button class="tool-btn warn" onclick="clearAll()">全削除</button>
       </div>
 
       <!-- 行一覧（スマホのみ） -->
       <div id="row-container">
         <div class="row-header">
-          <span>時間(秒)</span><span>向き</span><span>強さ</span><span>強さ(棒)</span><span></span>
+          <span>時間(ms)</span><span>向き</span><span>強さ</span><span>強さ(棒)</span><span></span>
         </div>
         <div id="row-list-mobile" class="row-list-inner" style="flex:1;overflow-y:auto;"></div>
       </div>
@@ -285,7 +286,7 @@
     <div id="right-col">
       <div class="col-title">行一覧</div>
       <div class="row-header">
-        <span>時間(秒)</span><span>向き</span><span>強さ</span><span>強さ(棒)</span><span></span>
+        <span>時間(ms)</span><span>向き</span><span>強さ</span><span>強さ(棒)</span><span></span>
       </div>
       <div id="row-list-pc" class="row-list-inner" style="flex:1;overflow-y:auto;"></div>
     </div>
@@ -422,7 +423,7 @@
         const ratio = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
         const dur   = player.duration || 0;
         const sec   = ratio * dur;
-        document.getElementById('inputTime').value         = sec.toFixed(1);
+        document.getElementById('inputTime').value         = sec.toFixed(3);
         document.getElementById('tlPlayhead').style.left   = (ratio*100)+'%';
         document.getElementById('seekbarFill').style.width = (ratio*100)+'%';
         document.getElementById('timecur').textContent     = formatTime(sec);
@@ -459,7 +460,7 @@
     }
 
     function setCurrentTime() {
-      document.getElementById('inputTime').value = player.currentTime.toFixed(1);
+      document.getElementById('inputTime').value = player.currentTime.toFixed(3);
     }
 
     function addRow() {
@@ -470,7 +471,7 @@
       if (dir!==0&&dir!==1)          { alert('向きは0か1を入力してください'); return; }
       if (isNaN(strength)||strength<0||strength>100) { alert('強さは0〜100で入力してください'); return; }
       pushUndo();
-      schedule.push({ time_ms:Math.round(timeSec*10), direction:dir, strength });
+      schedule.push({ time_ms:Math.round(timeSec*1000), direction:dir, strength });
       schedule.sort((a,b)=>a.time_ms-b.time_ms);
       renderRows(); renderTimeline();
     }
@@ -490,7 +491,7 @@
         const div = document.createElement('div');
         div.className = 'csv-row';
         div.innerHTML = `
-          <span>${(row.time_ms/10).toFixed(1)}</span>
+          <span>${row.time_ms}</span>
           <span><span class="dir-tag d${row.direction}">${row.direction===0?'右(0)':'左(1)'}</span></span>
           <span>${row.strength}</span>
           <span><div class="str-bar" style="width:${row.strength}%"></div></span>
@@ -507,6 +508,26 @@
     function deleteRow(i) {
       pushUndo();
       schedule.splice(i, 1);
+      renderRows(); renderTimeline();
+    }
+
+    // 既存の「1/10秒」形式CSVを ms に変換する（既存ファイル移行用）
+    function openConvertDsToMs() {
+      if (!schedule.length) { alert('CSVが空です'); return; }
+      const maxVal = Math.max(...schedule.map(r=>r.time_ms));
+      const durSec = (player && player.duration) ? player.duration : 0;
+      // 変換しても再生時刻は変わらない（デシ秒として読んだときと同じ位置になる）
+      const realSec = maxVal/10;
+      if (durSec && maxVal > durSec*1000) {
+        alert(`このCSVはすでに ms で書かれているように見えます（最大値 ${maxVal} がメディアの長さ ${(durSec*1000).toFixed(0)} ms を越えています）。\n変換する必要はありません。`);
+        return;
+      }
+      const msg = durSec
+        ? `数値を100倍します（1/10秒 → ms）。\n値の最大: ${maxVal} → ${maxVal*100}\n\n変換後の最終マーカー: 約 ${realSec.toFixed(1)} 秒（メディアの長さ ${durSec.toFixed(1)} 秒）\n変換前後で再生時刻は変わりません。数値の読み方だけが ms になります。\n\nすでに ms で書いている場合は キャンセル を選んでください。`
+        : `数値を100倍します（1/10秒 → ms）。\n値の最大: ${maxVal} → ${maxVal*100}\n\n変換後の最終マーカー: 約 ${realSec.toFixed(1)} 秒（デシ秒として読んだときと同じ時刻です）\n\nすでに ms で書いている場合は キャンセル を選んでください。`;
+      if (!confirm(msg)) return;
+      pushUndo();
+      schedule = schedule.map(r => ({...r, time_ms: r.time_ms * 100}));
       renderRows(); renderTimeline();
     }
 
@@ -601,13 +622,13 @@
       [...track.querySelectorAll('.tl-marker')].forEach(m=>m.remove());
       const dur = player.duration||0, h=track.clientHeight-4;
       schedule.forEach(row => {
-        const pct = dur?(row.time_ms/10/dur*100):0;
+        const pct = dur?(row.time_ms/1000/dur*100):0;
         const m = document.createElement('div');
         m.className = 'tl-marker dir'+row.direction;
         m.style.left   = pct+'%';
         m.style.height = Math.max(3,Math.round(row.strength/100*h))+'px';
-        m.title = formatTime(row.time_ms/10)+' 向き:'+row.direction+' 強さ:'+row.strength;
-        m.addEventListener('click', (e)=>{ e.stopPropagation(); document.getElementById('inputTime').value=(row.time_ms/10).toFixed(1); player.currentTime=row.time_ms/10; });
+        m.title = formatTime(row.time_ms/1000)+' 向き:'+row.direction+' 強さ:'+row.strength;
+        m.addEventListener('click', (e)=>{ e.stopPropagation(); document.getElementById('inputTime').value=(row.time_ms/1000).toFixed(3); player.currentTime=row.time_ms/1000; });
         track.appendChild(m);
       });
       const marks=document.querySelectorAll('.tl-time-mark'), count=marks.length-1;
@@ -647,7 +668,7 @@
       pushUndo();
       const maxMs=schedule[schedule.length-1].time_ms;
       const mirrored=[...schedule].reverse().map(row=>({
-        time_ms:maxMs+(maxMs-row.time_ms)+10,
+        time_ms:maxMs+(maxMs-row.time_ms)+1000,   // 元区間の終了から1秒後にミラー区間を置く
         direction:row.direction===0?1:0,
         strength:row.strength,
       }));
@@ -661,7 +682,7 @@
       if (!schedule.length) return;
       pushUndo();
       const maxMs=schedule[schedule.length-1].time_ms;
-      const offset=maxMs+Math.round(interval*10);
+      const offset=maxMs+Math.round(interval*1000);
       const base=[...schedule];
       for (let i=1;i<count;i++) {
         base.forEach(row=>{ schedule.push({time_ms:row.time_ms+offset*i,direction:row.direction,strength:row.strength}); });
@@ -673,7 +694,7 @@
     function applyFade(dir) {
       const startSec=parseFloat(document.getElementById('fadeStart').value)||0;
       const endSec=parseFloat(document.getElementById('fadeEnd').value)||5;
-      const startMs=Math.round(startSec*10), endMs=Math.round(endSec*10);
+      const startMs=Math.round(startSec*1000), endMs=Math.round(endSec*1000);
       if (startMs>=endMs) { alert('終了時間は開始時間より大きくしてください'); return; }
       pushUndo();
       schedule=schedule.map(row=>{
@@ -723,7 +744,7 @@
     function applyPattern(key) {
       if (!patterns[key]) return;
       pushUndo();
-      const offset=schedule.length?schedule[schedule.length-1].time_ms+10:0;
+      const offset=schedule.length?schedule[schedule.length-1].time_ms+1000:0;   // 既存の末尾から1秒後に追記する
       patterns[key].forEach(row=>{ schedule.push({time_ms:row.time_ms+offset,direction:row.direction,strength:row.strength}); });
       schedule.sort((a,b)=>a.time_ms-b.time_ms);
       renderRows(); renderTimeline(); closePatternModal();
