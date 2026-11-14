@@ -572,7 +572,10 @@
     // ヘッダとして黙って捨ててしまうので、どれかの欄が数値ならデータ行と見なす。
     // 本物のヘッダ（time_ms,direction,strength / 時間,方向,強さ）はどの欄も数値にならない。
     function isCsvHeaderLine(line) {
-      return splitCsvLine(line).every(p => p === '' || !Number.isFinite(Number(p)));
+      const parts = splitCsvLine(line);
+      // 少なくとも1つの欄が実際に文字を持っていることも条件にする（index.html と同じ判定）。
+      // 全部が空の行（`,,` など）はヘッダではなく「読めない行」として件数に入れる。
+      return parts.some(p => p !== '') && parts.every(p => p === '' || !Number.isFinite(Number(p)));
     }
 
     function parseCSV(text) {
@@ -705,8 +708,8 @@
         applyBtn.onclick=()=>{ applyMirror(); modal.classList.add('hidden'); };
       } else if (type==='repeat') {
         title.textContent='繰り返し';
-        fields.innerHTML=`<div class="process-field"><label>繰り返し回数</label><input class="process-input" type="number" id="repeatCount" min="1" value="2"></div><div class="process-field"><label>間隔（秒）</label><input class="process-input" type="number" id="repeatInterval" min="0" step="0.1" value="0"></div>`;
-        applyBtn.onclick=()=>{ applyRepeat(); modal.classList.add('hidden'); };
+        fields.innerHTML=`<div class="process-field"><label>繰り返し回数</label><input class="process-input" type="number" id="repeatCount" min="2" value="2"></div><div class="process-field"><label>間隔（秒）</label><input class="process-input" type="number" id="repeatInterval" min="0.1" step="0.1" value="1"></div>`;
+        applyBtn.onclick=()=>{ if (applyRepeat()) modal.classList.add('hidden'); };
       } else if (type==='fadein') {
         title.textContent='フェードイン';
         fields.innerHTML=`<div class="process-field"><label>開始時間（秒）</label><input class="process-input" type="number" id="fadeStart" min="0" step="0.1" value="0"></div><div class="process-field"><label>終了時間（秒）</label><input class="process-input" type="number" id="fadeEnd" min="0" step="0.1" value="5"></div>`;
@@ -733,9 +736,16 @@
     }
 
     function applyRepeat() {
-      const count=parseInt(document.getElementById('repeatCount').value)||2;
-      const interval=parseFloat(document.getElementById('repeatInterval').value)||0;
       if (!schedule.length) return;
+      // input の min はブラウザのチェック（form submit など）にしか効かないので、ここでも弾く。
+      // 負の間隔を通すとオフセットが負になり、「繰り返して増やした行」の時間が負になる。すると
+      // 保存した次の読み込みで「読めない行」として落ち、増えたはずの行が消える。
+      const countRaw = parseInt(document.getElementById('repeatCount').value);
+      const intervalRaw = parseFloat(document.getElementById('repeatInterval').value);
+      if (!Number.isInteger(countRaw) || countRaw < 2) { alert('繰り返しの回数は 2 以上の整数で入力してください。'); return false; }
+      if (!Number.isFinite(intervalRaw) || intervalRaw <= 0) { alert('繰り返しの間隔は 0 より大きい秒数（例: 1）で入力してください。'); return false; }
+      const count = countRaw;
+      const interval = intervalRaw;
       pushUndo();
       const maxMs=schedule[schedule.length-1].time_ms;
       const offset=maxMs+Math.round(interval*1000);
@@ -745,6 +755,7 @@
       }
       schedule.sort((a,b)=>a.time_ms-b.time_ms);
       renderRows(); renderTimeline();
+      return true;   // 入力値が不正なときは窓を閉じないで残すため、成否を返す
     }
 
     function applyFade(dir) {
