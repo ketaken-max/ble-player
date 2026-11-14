@@ -1518,20 +1518,37 @@
     });
     if (document.hidden) enableHiddenTicker();
 
+    // 先頭行がヘッダ行かデータ行かを見分ける（editor.html と同じ判定）。
+    // ヘッダの無いCSVで最初の指令が黙って消えるのを防ぐ。
+    function isCsvHeaderLine(line) { return !/^ *-?\d+ *[,，]/.test(line); }
+
     function loadCSV(file) {
       const reader = new FileReader();
       reader.onload = (e) => {
-        const lines = e.target.result.replace(/\r/g, '').trim().split('\n').slice(1);
-        schedule = lines.map(line => {
-          const [time_ms,direction,strength] = line.split(',').map(s=>s.trim());
-          const t = parseInt(time_ms);
-          if (isNaN(t) || t < 0) return null;
-          return {
+        const lines = e.target.result.split(/\r?\n/).map(l => l.trim()).filter(l => l);
+        if (lines.length && isCsvHeaderLine(lines[0])) lines.shift();   // 先頭がヘッダなら捨てる（そうでない場合は残す）
+        let bad = 0;      // 捨てた行
+        let fixed = 0;    // 強さを読めない値から 0 に直した行
+        schedule = [];
+        lines.forEach(line => {
+          const parts = line.split(',').map(s => s.trim());
+          const t = Number(parts[0]);
+          if (!Number.isInteger(t) || t < 0) { bad++; return; }
+          let s = Number(parts[2]);
+          if (!Number.isFinite(s)) { fixed++; s = 0; }   // 数値でない強さは 0 として扱う
+          schedule.push({
             time_ms: t,
-            direction: parseInt(direction) === 1 ? 1 : 0,
-            strength: Math.max(0, Math.min(100, parseInt(strength) || 0))
-          };
-        }).filter(Boolean).sort((a,b) => a.time_ms - b.time_ms);
+            direction: Number(parts[1]) === 1 ? 1 : 0,          // 0/1 以外は右(0)として扱う
+            strength: Math.max(0, Math.min(100, Math.round(s)))  // 0〜100 に収める
+          });
+        });
+        schedule.sort((a,b) => a.time_ms - b.time_ms);
+        if (bad || fixed) {
+          const msgs = [];
+          if (bad) msgs.push(bad + ' 行は読めないため飛ばしました');
+          if (fixed) msgs.push(fixed + ' 行の強さは 0 に直しました');
+          alert(msgs.join(' / ') + '（各行は time_ms,direction,strength の形で書いてください）');
+        }
         lastSentIndex = -1;
         // pendingCommand は消さない。トラック切替で sendStop() が積んだ停止を
         // 消してしまうと、機器が前トラックの動きを維持したまま次に入る。
@@ -1542,6 +1559,8 @@
           player.addEventListener('loadedmetadata', renderTimeline, {once:true});
         }
       };
+      // FSAの許可が切れたときなどに、理由も出さずにマーカーだけ消えるのを防ぐ
+      reader.onerror = () => alert('CSV を読み込めませんでした。「＋ フォルダを追加」でフォルダをもう一度選んでください。');
       reader.readAsText(file);
     }
 
