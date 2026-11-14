@@ -1580,10 +1580,14 @@
     // ヘッダとして黙って捨ててしまうので、どれかの欄が数値ならデータ行と見なす。
     // 本物のヘッダ（time_ms,direction,strength / 時間,方向,強さ）はどの欄も数値にならない。
     function isCsvHeaderLine(line) {
-      return splitCsvLine(line).every(p => p === '' || !Number.isFinite(Number(p)));
+      const parts = splitCsvLine(line);
+      // 少なくとも1つの欄が実際に文字を持っていることも条件にする。全部が空の行（Excel がデータの下に
+      // つくる `,,` のような行）はヘッダではなく「読めない行」として件数に入れる。黙って消えると
+      // README の「読めない行は飛ばして件数を出す」という約束に合わない。
+      return parts.some(p => p !== '') && parts.every(p => p === '' || !Number.isFinite(Number(p)));
     }
 
-    let csvWarnKey = '';   // 同じ内容のCSVで同じ警告を繰り返し出さないための指紋
+    const warnedCsvKeys = new Set();   // 出した警告の指紋（ファイル名 + 本文のハッシュ + 件数）。A→B→A と選び直しても A を繰り返さない
 
     function loadCSV(file, base) {
       const reader = new FileReader();
@@ -1616,13 +1620,15 @@
         if (bad || fixed) {
           // 同じCSVを何度選び直しても同じ警告を繰り返さないようにする。
           // alert は同期的なので、出ている間は rAF もタイムライン描画もBLE送信も止まる。
-          // 内容の指紋と同じ壊れ方の組み合わせで1回だけ出す（別のファイルや別の壊れ方なら再度出る）。
+          // 指紋は「ファイル名 + 本文 + 壊れ方の件数」。ファイル名を入れるのは、32ビットのハッシュは
+          // 衝突して別内容なのに黙ってしまうことがあるため（同じ内容を別の名前で読んだときは、
+          // 同じ壊れ方なので出ない — 同じファイルを読み直すのと同じ扱いになる）。
           const src = e.target.result;
           let h = 0;
           for (let i = 0; i < src.length; i++) h = (h * 31 + src.charCodeAt(i)) | 0;
-          const warnKey = h + ':' + bad + ':' + fixed;
-          if (warnKey !== csvWarnKey) {
-            csvWarnKey = warnKey;
+          const warnKey = (file && file.name ? file.name : '') + ':' + h + ':' + bad + ':' + fixed;
+          if (!warnedCsvKeys.has(warnKey)) {
+            warnedCsvKeys.add(warnKey);
             const msgs = [];
             if (bad) msgs.push(bad + ' 行は読めないため飛ばしました');
             if (fixed) msgs.push(fixed + ' 行の強さは 0 に直しました');
