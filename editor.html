@@ -705,25 +705,25 @@
       if (type==='mirror') {
         title.textContent='ミラーリング';
         fields.innerHTML='<p style="font-size:11px;color:var(--text-dim);font-family:\'JetBrains Mono\',monospace;">前半の動作を後半に向き反転でコピーします。</p>';
-        applyBtn.onclick=()=>{ applyMirror(); modal.classList.add('hidden'); };
+        applyBtn.onclick=()=>{ if (applyMirror()) modal.classList.add('hidden'); };
       } else if (type==='repeat') {
         title.textContent='繰り返し';
-        fields.innerHTML=`<div class="process-field"><label>繰り返し回数</label><input class="process-input" type="number" id="repeatCount" min="2" value="2"></div><div class="process-field"><label>間隔（秒）</label><input class="process-input" type="number" id="repeatInterval" min="0.1" step="0.1" value="1"></div>`;
+        fields.innerHTML=`<div class="process-field"><label>繰り返し回数</label><input class="process-input" type="number" id="repeatCount" min="2" value="2"></div><div class="process-field"><label>間隔（秒）</label><input class="process-input" type="number" id="repeatInterval" min="0" step="0.1" value="0"></div>`;
         applyBtn.onclick=()=>{ if (applyRepeat()) modal.classList.add('hidden'); };
       } else if (type==='fadein') {
         title.textContent='フェードイン';
         fields.innerHTML=`<div class="process-field"><label>開始時間（秒）</label><input class="process-input" type="number" id="fadeStart" min="0" step="0.1" value="0"></div><div class="process-field"><label>終了時間（秒）</label><input class="process-input" type="number" id="fadeEnd" min="0" step="0.1" value="5"></div>`;
-        applyBtn.onclick=()=>{ applyFade('in'); modal.classList.add('hidden'); };
+        applyBtn.onclick=()=>{ if (applyFade('in')) modal.classList.add('hidden'); };
       } else if (type==='fadeout') {
         title.textContent='フェードアウト';
         fields.innerHTML=`<div class="process-field"><label>開始時間（秒）</label><input class="process-input" type="number" id="fadeStart" min="0" step="0.1" value="0"></div><div class="process-field"><label>終了時間（秒）</label><input class="process-input" type="number" id="fadeEnd" min="0" step="0.1" value="5"></div>`;
-        applyBtn.onclick=()=>{ applyFade('out'); modal.classList.add('hidden'); };
+        applyBtn.onclick=()=>{ if (applyFade('out')) modal.classList.add('hidden'); };
       }
       modal.classList.remove('hidden');
     }
 
     function applyMirror() {
-      if (!schedule.length) return;
+      if (!schedule.length) { alert('CSVが空です'); return true; }   // 理由を伝えて窓は閉じる（他のツールと同じ）
       pushUndo();
       const maxMs=schedule[schedule.length-1].time_ms;
       const mirrored=[...schedule].reverse().map(row=>({
@@ -733,17 +733,20 @@
       }));
       schedule=[...schedule,...mirrored];
       renderRows(); renderTimeline();
+      return true;
     }
 
     function applyRepeat() {
-      if (!schedule.length) return;
+      if (!schedule.length) { alert('CSVが空です'); return true; }   // 理由を伝えて窓は閉じる（他のツールと同じ）
       // input の min はブラウザのチェック（form submit など）にしか効かないので、ここでも弾く。
-      // 負の間隔を通すとオフセットが負になり、「繰り返して増やした行」の時間が負になる。すると
-      // 保存した次の読み込みで「読めない行」として落ち、増えたはずの行が消える。
-      const countRaw = parseInt(document.getElementById('repeatCount').value);
-      const intervalRaw = parseFloat(document.getElementById('repeatInterval').value);
+      // 負の間隔を通すとオフセットが負になり、「繰り返して増やした行」の時間が負になることがある。
+      // そうすると保存した次の読み込みで「読めない行」として落ち、増えたはずの行が消える。
+      // 0 は「余白なしで連続して並べる」を表す従来の書き方なので、そのまま許す。
+      // parseInt は "3.9" を 3 に、"2e3" を 2 に黙って丸めるので、ここでは Number で整数判定する。
+      const countRaw = Number(document.getElementById('repeatCount').value);
+      const intervalRaw = Number(document.getElementById('repeatInterval').value);
       if (!Number.isInteger(countRaw) || countRaw < 2) { alert('繰り返しの回数は 2 以上の整数で入力してください。'); return false; }
-      if (!Number.isFinite(intervalRaw) || intervalRaw <= 0) { alert('繰り返しの間隔は 0 より大きい秒数（例: 1）で入力してください。'); return false; }
+      if (!Number.isFinite(intervalRaw) || intervalRaw < 0) { alert('繰り返しの間隔は 0 以上の秒数で入力してください（負の値は増やす行の時刻が負になるので使えません）。'); return false; }
       const count = countRaw;
       const interval = intervalRaw;
       pushUndo();
@@ -759,10 +762,12 @@
     }
 
     function applyFade(dir) {
-      const startSec=parseFloat(document.getElementById('fadeStart').value)||0;
-      const endSec=parseFloat(document.getElementById('fadeEnd').value)||5;
+      if (!schedule.length) { alert('CSVが空です'); return true; }   // 理由を伝えて窓は閉じる（他のツールと同じ）
+      const startSec=Number(document.getElementById('fadeStart').value);
+      const endSec=Number(document.getElementById('fadeEnd').value);
+      if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) { alert('開始時間と終了時間を数値で入力してください。'); return false; }
       const startMs=Math.round(startSec*1000), endMs=Math.round(endSec*1000);
-      if (startMs>=endMs) { alert('終了時間は開始時間より大きくしてください'); return; }
+      if (startMs>=endMs) { alert('終了時間は開始時間より大きくしてください'); return false; }
       pushUndo();
       schedule=schedule.map(row=>{
         if (row.time_ms<startMs||row.time_ms>endMs) return row;
@@ -771,6 +776,7 @@
         return {...row,strength:Math.round(row.strength*factor)};
       });
       renderRows(); renderTimeline();
+      return true;
     }
 
     // ══════════════════════════════

@@ -1602,7 +1602,7 @@
       return parts.some(p => p !== '') && parts.every(p => p === '' || !Number.isFinite(Number(p)));
     }
 
-    const warnedCsvKeys = new Set();   // 出した警告の指紋（ファイル名 + 本文のハッシュ + 件数）。A→B→A と選び直しても A を繰り返さない
+    const warnedCsvKeys = new Set();   // 出した警告の指紋（トラック + 本文 + 件数）。同じトラック・同じ壊れ方なら繰り返さない（A→B→A と選び直しても、編集画面から戻って読み直しても出ない）。ページを再読み込みすれば消える
 
     function loadCSV(file, base) {
       const reader = new FileReader();
@@ -1635,13 +1635,14 @@
         if (bad || fixed) {
           // 同じCSVを何度選び直しても同じ警告を繰り返さないようにする。
           // alert は同期的なので、出ている間は rAF もタイムライン描画もBLE送信も止まる。
-          // 指紋は「ファイル名 + 本文 + 壊れ方の件数」。ファイル名を入れるのは、32ビットのハッシュは
-          // 衝突して別内容なのに黙ってしまうことがあるため（同じ内容を別の名前で読んだときは、
-          // 同じ壊れ方なので出ない — 同じファイルを読み直すのと同じ扱いになる）。
+          // 指紋は「トラック + 本文 + 壊れ方の件数」。ファイル名ではなくトラック（base）で覚えるのは、
+          // 編集CSVを反映するときの File 名は base + '.csv' で、フォルダ由来のCSVの実名と違うことがあるため
+          // （位置対応付けやリネーム後では名前がズレて、同じトラックの同じ壊れ方を2回報告してしまう）。
+          // 本文のハッシュだけだと別内容と衝突して黙ることがあるので、本文と件数も指紋に含める。
           const src = e.target.result;
           let h = 0;
           for (let i = 0; i < src.length; i++) h = (h * 31 + src.charCodeAt(i)) | 0;
-          const warnKey = (file && file.name ? file.name : '') + ':' + h + ':' + bad + ':' + fixed;
+          const warnKey = (base || '') + ':' + h + ':' + bad + ':' + fixed;
           if (!warnedCsvKeys.has(warnKey)) {
             warnedCsvKeys.add(warnKey);
             const msgs = [];
