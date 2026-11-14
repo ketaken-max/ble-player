@@ -512,8 +512,10 @@
           <span><div class="str-bar" style="width:${row.strength}%"></div></span>
           <button class="del-btn" data-i="${i}">✕</button>`;
         div.querySelector('.del-btn').addEventListener('click', ()=>deleteRow(i));
-        // 両方のリストに追加
-        document.getElementById('row-list-pc').appendChild(div.cloneNode(true));
+        // PC用の複製にもイベントを付け直す（cloneNode は addEventListener を引き継がない）
+        const pcDiv = div.cloneNode(true);
+        pcDiv.querySelector('.del-btn').addEventListener('click', ()=>deleteRow(i));
+        document.getElementById('row-list-pc').appendChild(pcDiv);
         const mobileDiv = div.cloneNode(true);
         mobileDiv.querySelector('.del-btn').addEventListener('click', ()=>deleteRow(i));
         document.getElementById('row-list-mobile').appendChild(mobileDiv);
