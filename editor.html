@@ -514,8 +514,18 @@
     // 既存の「1/10秒」形式CSVを ms に変換する（既存ファイル移行用）
     function openConvertDsToMs() {
       if (!schedule.length) { alert('CSVが空です'); return; }
-      const secMax = Math.max(...schedule.map(r=>r.time_ms)) / 100;
-      if (!confirm(`時間値を100倍します（1/10秒 → ms）。\n現在の最大値: ${Math.max(...schedule.map(r=>r.time_ms))} → ${Math.max(...schedule.map(r=>r.time_ms))*100} ms\n（約 ${secMax.toFixed(1)} 秒 → ${(secMax*10).toFixed(1)} 秒）\n\nメディアの長さに合う場合は OK を、もう変換不要なら キャンセル を選んでください。`)) return;
+      const maxVal = Math.max(...schedule.map(r=>r.time_ms));
+      const durSec = (player && player.duration) ? player.duration : 0;
+      // 変換しても再生時刻は変わらない（デシ秒として読んだときと同じ位置になる）
+      const realSec = maxVal/10;
+      if (durSec && maxVal > durSec*1000) {
+        alert(`このCSVはすでに ms で書かれているように見えます（最大値 ${maxVal} がメディアの長さ ${(durSec*1000).toFixed(0)} ms を越えています）。\n変換する必要はありません。`);
+        return;
+      }
+      const msg = durSec
+        ? `数値を100倍します（1/10秒 → ms）。\n値の最大: ${maxVal} → ${maxVal*100}\n\n変換後の最終マーカー: 約 ${realSec.toFixed(1)} 秒（メディアの長さ ${durSec.toFixed(1)} 秒）\n変換前後で再生時刻は変わりません。数値の読み方だけが ms になります。\n\nすでに ms で書いている場合は キャンセル を選んでください。`
+        : `数値を100倍します（1/10秒 → ms）。\n値の最大: ${maxVal} → ${maxVal*100}\n\n変換後の最終マーカー: 約 ${realSec.toFixed(1)} 秒（デシ秒として読んだときと同じ時刻です）\n\nすでに ms で書いている場合は キャンセル を選んでください。`;
+      if (!confirm(msg)) return;
       pushUndo();
       schedule = schedule.map(r => ({...r, time_ms: r.time_ms * 100}));
       renderRows(); renderTimeline();
@@ -658,7 +668,7 @@
       pushUndo();
       const maxMs=schedule[schedule.length-1].time_ms;
       const mirrored=[...schedule].reverse().map(row=>({
-        time_ms:maxMs+(maxMs-row.time_ms)+100,
+        time_ms:maxMs+(maxMs-row.time_ms)+1000,   // 元区間の終了から1秒後にミラー区間を置く
         direction:row.direction===0?1:0,
         strength:row.strength,
       }));
@@ -734,7 +744,7 @@
     function applyPattern(key) {
       if (!patterns[key]) return;
       pushUndo();
-      const offset=schedule.length?schedule[schedule.length-1].time_ms+100:0;
+      const offset=schedule.length?schedule[schedule.length-1].time_ms+1000:0;   // 既存の末尾から1秒後に追記する
       patterns[key].forEach(row=>{ schedule.push({time_ms:row.time_ms+offset,direction:row.direction,strength:row.strength}); });
       schedule.sort((a,b)=>a.time_ms-b.time_ms);
       renderRows(); renderTimeline(); closePatternModal();
