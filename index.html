@@ -1551,7 +1551,7 @@
     function loadCSV(file) {
       const reader = new FileReader();
       reader.onload = (e) => {
-        const lines = e.target.result.split(/\r?\n/).map(l => l.trim()).filter(l => l);
+        const lines = e.target.result.split(/\r\n|\r|\n/).map(l => l.trim()).filter(l => l);
         if (lines.length && isCsvHeaderLine(lines[0])) lines.shift();   // 先頭がヘッダなら捨てる（そうでない場合は残す）
         let bad = 0;      // 捨てた行
         let fixed = 0;    // 強さを読めない値から 0 に直した行
@@ -1665,7 +1665,11 @@
     // ══════════════════════════════
     const ctxMenu = document.getElementById('ctx-menu');
     document.addEventListener('click', () => ctxMenu.classList.remove('show'));
-    document.addEventListener('contextmenu', () => ctxMenu.classList.remove('show'));
+    // 右クリックでは常に「古いメニューを閉じる → その後に行のハンドラが新しいメニューを出す」という
+    // 順序にしたい。document 側を capture フェーズにすると行のハンドラより先に走るため、
+    // 今後増えるどの contextmenu ハンドラも stopPropagation を意識しなくても
+    // 「作った直後に消える」状態にならない（忘れると同じバグが再発する）。
+    document.addEventListener('contextmenu', () => ctxMenu.classList.remove('show'), true);
 
     function showContextMenu(x, y, items) {
       ctxMenu.innerHTML = '';

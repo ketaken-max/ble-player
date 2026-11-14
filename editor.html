@@ -495,10 +495,7 @@
     //  行一覧描画（PC・スマホ両方）
     // ══════════════════════════════
     function renderRows() {
-      const isPC     = window.innerWidth >= 769;
-      const listId   = isPC ? 'row-list-pc' : 'row-list-mobile';
-      const list     = document.getElementById(listId);
-      // 両方クリア
+      // 両方クリア（PC用とスマホ用の一覧は常に作り、CSSで片方だけ見せる）
       document.getElementById('row-list-pc').innerHTML     = '';
       document.getElementById('row-list-mobile').innerHTML = '';
 
@@ -510,9 +507,10 @@
           <span><span class="dir-tag d${row.direction}">${row.direction===0?'右(0)':'左(1)'}</span></span>
           <span>${row.strength}</span>
           <span><div class="str-bar" style="width:${row.strength}%"></div></span>
-          <button class="del-btn" data-i="${i}">✕</button>`;
-        div.querySelector('.del-btn').addEventListener('click', ()=>deleteRow(i));
-        // PC用の複製にもイベントを付け直す（cloneNode は addEventListener を引き継がない）
+          <button class="del-btn">✕</button>`;
+        // この div はそのまま DOM には入れない（cloneNode したものを両方の一覧に入れる）ので、
+        // ここにはイベントを付けない。
+        // cloneNode は addEventListener を引き継がないので、PC用・スマホ用の複製それぞれに付ける。
         const pcDiv = div.cloneNode(true);
         pcDiv.querySelector('.del-btn').addEventListener('click', ()=>deleteRow(i));
         document.getElementById('row-list-pc').appendChild(pcDiv);
@@ -579,7 +577,9 @@
     }
 
     function parseCSV(text) {
-      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
+      // 改行は CR LF・LF・CR すべてで分ける（旧 Mac 形式の CR だけのファイルを
+      // 1行として扱って全部の行を「読めない行」にしないため）
+      const lines = text.split(/\r\n|\r|\n/).map(l => l.trim()).filter(l => l);
       if (lines.length && isCsvHeaderLine(lines[0])) lines.shift();   // 先頭がヘッダなら捨てる（そうでない場合は残す）
       let bad = 0;      // 捨てた行
       let fixed = 0;    // 強さを読めない値から 0 に直した行
