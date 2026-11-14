@@ -386,9 +386,10 @@
     let keepAliveTimer = null;
     let isBleBusy = false;
     let isAutoReconnecting = false;
-    let pendingCommand = null;   // 直近1コマンドだけ保持する（古い命令を機器に送らないため）
+    let pendingCommand = null;   // 直近1コマンドだけ保持する（古い命令を機器に送らないため）。常に新しい配列を入れること（lastCommand そのものを代入しない。再flushの判定が「自分自身か否か」を配列の同一性で見ているため）
     let lastCommand    = null;   // 送信に成功した最後のコマンド（維持パケットに再利用）
     let keepAliveWarned = false;
+    let bleWarned = false;   // 送信失敗の警告を1回に抑える（失敗が続く間は繰り返さない）。送信成功で解く
 
     // ─── コマンドのエンコード（方向 + 強さ×速度倍率） ───
     function encodeCommand(direction, strength) {
@@ -413,9 +414,13 @@
           // 送信中に新しいコマンドが積まれていたらそれは残す。無条件に消すと、
           // 停止や方向変更が一度も送られず、機器が古い動きを維持し続ける。
           if (pendingCommand === cmd) pendingCommand = null;
-          lastCommand = cmd; keepAliveWarned = false;
+          lastCommand = cmd; keepAliveWarned = false; bleWarned = false;
         })
-        .catch(e => console.warn('BLE送信エラー:', e))
+        .catch(e => {
+          // 維持パケットは5秒ごとに失敗し続けるので、無間引きだとログが溢れる。
+          // 失敗している間は1回だけ出して、成功したときに解く（復帰後の新しい失敗は出る）。
+          if (!bleWarned) { bleWarned = true; console.warn('BLE送信エラー:', e); }
+        })
         .finally(() => {
           isBleBusy = false;
           // 「積み上げず最新だけ送る」仕様はそのまま、書き込みが終わった直後に最新を流す。
@@ -450,6 +455,12 @@
         
         // ★ 接続がすべて成功したあとに、対策Bのタイマーを起動する
         startWindowsKeepAlive();
+
+        // 自動再接続と同じように、積まれたコマンドをこの時点で一度流す。
+        // 機器は再接続後に「何も動かない」状態になるので、停止や方向変更を再送しないと
+        // 画面の状態と機器の動きが食い違うままになる。初回接続では lastCommand が無いので打たない。
+        if (!pendingCommand && lastCommand) pendingCommand = lastCommand.slice();
+        flushPendingCommand();
 
         // 再接続ごとに同じ device へ再購読すると onDisconnected が二重に走るため、先に外す
         bleDevice.removeEventListener('gattserverdisconnected', onDisconnected);
@@ -550,6 +561,10 @@
     async function onDisconnected() {
       if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
       bleChar = null;
+      // 書き込みの最中に切れると、promise が解決せずに isBleBusy が true のまま残ることがある
+      // （await が永遠に解決しない環境がある）。そのまま再接続すると、以後の送信は
+      // 「送信中」で全て弾かれて何も届かない。切断時には必ず解放する。
+      isBleBusy = false;
       
       // もし意図しない切断（150秒の壁）であれば、ダイアログを出さずに自動再接続を試みる
       if (bleDevice && !isAutoReconnecting) {
