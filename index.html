@@ -1771,8 +1771,15 @@
     // 消したトラックの状態をまとめて片付ける。
     // ここを怠ると、後で別のフォルダに同じ名前のトラック（track01 などは作品間で衝突しやすい）を
     // 読み直したとき、消したはずの「編集済」CSVが黙って当たりに来る。
-    function forgetTrackState(bases) {
-      bases.forEach(base => {
+    // keepWorkId 以外の作品に同じ base が残っている場合は消さない。
+    // ファイル名（base）で全体を管理しているので、作品 A を消すと別作品 B の同名トラックの
+    // メディア・CSV・編集CSVまで消えて B が「未読込」になる（同名は作品間で衝突しやすい）。
+    function forgetTrackState(bases, keepWorkId) {
+      const alive = new Set();
+      Object.values(library).forEach(w => {
+        if (w.id !== keepWorkId) trackBasesOfWork(w).forEach(b => alive.add(b));
+      });
+      bases.filter(b => !alive.has(b)).forEach(base => {
         delete mediaFiles[base]; delete mediaOrigin[base]; delete originalCsv[base];
         delete csvFiles[base];   delete csvHandles[base];
         dropCsvEditKey(base);
@@ -1789,10 +1796,16 @@
       player.pause();
       if (mediaBlobURL) { URL.revokeObjectURL(mediaBlobURL); mediaBlobURL = null; }
       player.removeAttribute('src'); player.load();
+      player.style.display = 'none';          // 空の <video> を残さない（loadTrack が再び表示する）
       hideThumbnail();
       document.querySelector('.no-media').style.display = '';
       schedule = []; lastSentIndex = -1; currentTrack = null;
-      renderTimeline();
+      renderTimeline();                        // 消えたトラックのマーカーを消す
+      // 時刻表示・シークバー・再生ヘッドは、次の読み込みまで古い位置が残り続ける
+      document.getElementById('timecur').textContent = '00:00';
+      document.getElementById('timedur').textContent = '00:00';
+      document.getElementById('seekbarFill').style.width = '0%';
+      document.getElementById('tlPlayhead').style.left = '0%';
       sendStop();
     }
     // 作品ごと消したときは、選択そのものも戻す（サイドバーに「作品を選択してください」に戻す）
@@ -1800,7 +1813,11 @@
       clearTrackPlayback();
       currentWorkId = null; trackList = [];
       document.getElementById('work-title-display').textContent = '作品を選択してください';
-      tracksEl.innerHTML = '';
+      document.getElementById('work-rj-display').textContent = '';
+      document.getElementById('work-circle-display').textContent = '';
+      document.getElementById('editMetaBtn').style.display = 'none';
+      document.getElementById('editCsvBtn').style.display = 'none';
+      document.getElementById('tracksEl').innerHTML = '';
     }
 
     async function deleteWorkFolder(workId) {
@@ -1809,9 +1826,12 @@
       if (!rootDirHandle) { alert('フォルダが見つかりません。'); return; }
       try {
         await rootDirHandle.removeEntry(w.folderName, { recursive: true }).catch(()=>{});
-        forgetTrackState(trackBasesOfWork(w));
+        forgetTrackState(trackBasesOfWork(w), workId);
         delete library[workId];
         delete dirHandles[w.folderName];
+        // サブフォルダのハンドルも消す（裸の名前でキャッシュしているので、消滅済みのハンドルを
+        // そのまま引くと、後で別作品の同名サブをリネームしたときにNotFoundErrorになる）
+        Object.keys(w.children || {}).forEach(sub => delete dirHandles[sub]);
         saveLibraryToStorage(); renderLibrarySidebar();
         // 消した作品が再生中・選択中だったものをそのまま残さない
         if (currentWorkId === workId) clearCurrentPlayback();
@@ -1908,12 +1928,19 @@
         }
 
         const wasPlaying = currentTrack === base;   // 消すトラックを再生中だったかどうか
-        forgetTrackState([base]);
+        forgetTrackState([base], workId);
         removeTrackFromWork(workId, base);
         saveLibraryToStorage();
         renderLibrarySidebar();
         // 消したトラックを再生中だったものは、そのまま鳴り続けない（作品の選択は残す）
         if (wasPlaying) clearTrackPlayback();
+        // トラック一覧に消えた行と、消えたトラックを指す表示が残らないように一覧を作り直す
+        // （勝手に先頭を鳴らさない。まだ残っているトラックを再生中だった場合はそれを続ける）
+        if (currentWorkId === workId) {
+          selectWork(workId, false);
+          if (!trackList.length) clearCurrentPlayback();   // 作品が空になったときは選択も戻す
+          else if (trackList.some(t => t.base === currentTrack) && mediaFiles[currentTrack]) loadTrack(currentTrack);
+        }
       } catch(e) { alert('削除に失敗しました: ' + e.message); }
     }
 
@@ -1965,7 +1992,7 @@
 
         // メモリ上のトラックを削除（編集CSVと元のCSVへの参照も一緒に片付ける）
         if (w.children[subName]) {
-          forgetTrackState(w.children[subName].map(t => t.base));
+          forgetTrackState(w.children[subName].map(t => t.base), workId);
           delete w.children[subName];
         }
         delete dirHandles[subName];
@@ -1975,7 +2002,8 @@
         // 再生していたトラックが消えた場合は再生を止める。まだ残っているトラックならそれを続ける。
         if (currentWorkId === workId) {
           selectWork(workId, false);
-          if (!trackList.some(t => t.base === currentTrack)) clearTrackPlayback();
+          if (!trackList.length) clearCurrentPlayback();   // 作品が空になったときは選択も戻す
+          else if (!trackList.some(t => t.base === currentTrack)) clearTrackPlayback();
           else if (mediaFiles[currentTrack]) loadTrack(currentTrack);
         }
       } catch(e) { alert('削除に失敗しました: ' + e.message); }
