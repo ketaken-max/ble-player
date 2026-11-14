@@ -566,9 +566,17 @@
     // ══════════════════════════════
     //  CSV
     // ══════════════════════════════
-    // 先頭行がヘッダ行かデータ行かを見分ける。ヘッダの無いCSVでは最初の指令が
-    // 黙って消えていたので、無条件に先頭行を捨てない。
-    function isCsvHeaderLine(line) { return !/^ *-?\d+ *[,，]/.test(line); }
+    // 区切りは半角・全角カンマの両方を受け取る。判定側と解析側で扱いが違うと、
+    // 全角カンマで書いたCSVが全行「読めない行」になって全部捨てられてしまう。
+    function splitCsvLine(line) { return line.split(/[,，]/).map(s => s.trim()); }
+
+    // 先頭行がヘッダ行かデータ行かを見分ける（index.html と同じ判定）。
+    // 「数値 + カンマで始まるか」だけでは "abc,0,50" のような壊れたデータ行を
+    // ヘッダとして黙って捨ててしまうので、どれかの欄が数値ならデータ行と見なす。
+    // 本物のヘッダ（time_ms,direction,strength / 時間,方向,強さ）はどの欄も数値にならない。
+    function isCsvHeaderLine(line) {
+      return splitCsvLine(line).every(p => p === '' || !Number.isFinite(Number(p)));
+    }
 
     function parseCSV(text) {
       const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
@@ -577,11 +585,14 @@
       let fixed = 0;    // 強さを読めない値から 0 に直した行
       schedule = [];
       lines.forEach(line => {
-        const parts = line.split(',').map(s => s.trim());
+        const parts = splitCsvLine(line);
+        // 空欄は 0 と数えられないようにする（Excel はデータの下に空行を ",," で保存することがある）。
+        // Number("") は 0 になるので、このチェックを足す前は空行が t=0 の指令として残っていた。
         const t = Number(parts[0]);
-        if (!Number.isInteger(t) || t < 0) { bad++; return; }
+        if (parts[0] === '' || !Number.isInteger(t) || t < 0) { bad++; return; }
         let s = Number(parts[2]);
-        if (!Number.isFinite(s)) { fixed++; s = 0; }   // 数値でない強さは 0 として扱う
+        // 数値でない・空の強さは 0 として扱う（欄が無い行と同じ扱いにして件数に含める）
+        if (parts[2] === '' || !Number.isFinite(s)) { fixed++; s = 0; }
         schedule.push({
           time_ms: t,
           direction: Number(parts[1]) === 1 ? 1 : 0,        // 0/1 以外は右(0)として扱う
@@ -593,7 +604,7 @@
         const msgs = [];
         if (bad) msgs.push(bad + ' 行は読めないため飛ばしました');
         if (fixed) msgs.push(fixed + ' 行の強さは 0 に直しました');
-        alert(msgs.join(' / ') + '（各行は time_ms,direction,strength の形で書いてください）');
+        alert(msgs.join(' / ') + '（各行は time_ms,direction,strength の形・整数で書いてください）');
       }
     }
 
