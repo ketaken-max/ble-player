@@ -409,9 +409,23 @@
       isBleBusy = true;
       // 応答なし送信（WithoutResponse）でパケットを最速処理
       bleChar.writeValueWithoutResponse(new Uint8Array(cmd))
-        .then(() => { pendingCommand = null; lastCommand = cmd; keepAliveWarned = false; })
+        .then(() => {
+          // 送信中に新しいコマンドが積まれていたらそれは残す。無条件に消すと、
+          // 停止や方向変更が一度も送られず、機器が古い動きを維持し続ける。
+          if (pendingCommand === cmd) pendingCommand = null;
+          lastCommand = cmd; keepAliveWarned = false;
+        })
         .catch(e => console.warn('BLE送信エラー:', e))
-        .finally(() => { isBleBusy = false; });
+        .finally(() => {
+          isBleBusy = false;
+          // 「積み上げず最新だけ送る」仕様はそのまま、書き込みが終わった直後に最新を流す。
+          // ただし積まれた「新しい」コマンドだけにする。失敗したコマンド自身をすぐにまた送ると、
+          // 切断済みのGATTへの書き込みが即 NetworkError で reject される状態では
+          // write → reject → re-flush が間隔なしに無限に回って（gattserverdisconnected が
+          // bleChar を消す前に抜けられないため）ページが止まりログが溢れる。
+          // 失敗したコマンドは従来のとおり維持パケット（5秒）か次のコマンドに任せる。
+          if (pendingCommand && pendingCommand !== cmd) flushPendingCommand();
+        });
       return true;
     }
 
@@ -470,6 +484,9 @@
           if (!keepAliveWarned) { keepAliveWarned = true; console.warn('維持パケットの送信に失敗:', e); }
         } finally {
           isBleBusy = false;
+          // 維持パケットを書いている間に積まれたコマンド（一時停止の停止コマンドや
+          // CSVの方向・強さの変化）を、次のtick（最大5秒）まで待たせない
+          flushPendingCommand();
         }
       }, 5000);
     }
@@ -530,11 +547,10 @@
           
           // 再度タイマーを起動し、切れる直前の状態を機器に送り直す
           startWindowsKeepAlive();
-          if (!flushPendingCommand() && lastCommand && bleChar) {
-            // 切断前に送信が詰まっていなかった場合は、最後のコマンドをそのまま送り直す
-            bleChar.writeValueWithoutResponse(new Uint8Array(lastCommand))
-              .catch(e => console.warn('復帰時の再送に失敗:', e));
-          }
+          // 積まれたコマンドがあればそれを優先し、無いときだけ最後のコマンドを再送する。
+          // 直接 writeValueWithoutResponse を呼ぶと isBleBusy を素通りして二重送信になる。
+          if (!pendingCommand && lastCommand) pendingCommand = lastCommand.slice();
+          flushPendingCommand();
           
           document.getElementById('bleLabel').textContent = (bleDevice.name || 'UFO SA') + ' 復帰済';
           document.getElementById('bleDot').classList.remove('disconnected');
