@@ -566,13 +566,35 @@
     // ══════════════════════════════
     //  CSV
     // ══════════════════════════════
+    // 先頭行がヘッダ行かデータ行かを見分ける。ヘッダの無いCSVでは最初の指令が
+    // 黙って消えていたので、無条件に先頭行を捨てない。
+    function isCsvHeaderLine(line) { return !/^ *-?\d+ *[,，]/.test(line); }
+
     function parseCSV(text) {
-      const lines = text.trim().split('\n').slice(1);
-      schedule = lines.map(line => {
-        const [time_ms,direction,strength] = line.split(',').map(s=>s.trim());
-        return { time_ms:parseInt(time_ms), direction:parseInt(direction), strength:parseInt(strength) };
-      }).filter(r=>!isNaN(r.time_ms));
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
+      if (lines.length && isCsvHeaderLine(lines[0])) lines.shift();   // 先頭がヘッダなら捨てる（そうでない場合は残す）
+      let bad = 0;      // 捨てた行
+      let fixed = 0;    // 強さを読めない値から 0 に直した行
+      schedule = [];
+      lines.forEach(line => {
+        const parts = line.split(',').map(s => s.trim());
+        const t = Number(parts[0]);
+        if (!Number.isInteger(t) || t < 0) { bad++; return; }
+        let s = Number(parts[2]);
+        if (!Number.isFinite(s)) { fixed++; s = 0; }   // 数値でない強さは 0 として扱う
+        schedule.push({
+          time_ms: t,
+          direction: Number(parts[1]) === 1 ? 1 : 0,        // 0/1 以外は右(0)として扱う
+          strength: Math.max(0, Math.min(100, Math.round(s)))  // 0〜100 に収める
+        });
+      });
       schedule.sort((a,b)=>a.time_ms-b.time_ms);
+      if (bad || fixed) {
+        const msgs = [];
+        if (bad) msgs.push(bad + ' 行は読めないため飛ばしました');
+        if (fixed) msgs.push(fixed + ' 行の強さは 0 に直しました');
+        alert(msgs.join(' / ') + '（各行は time_ms,direction,strength の形で書いてください）');
+      }
     }
 
     function toCSVText() {
