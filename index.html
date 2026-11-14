@@ -452,6 +452,9 @@
           } else {
             err.textContent = 'エラー: ' + e.message;
           }
+        } else if (scr.classList.contains('hidden')) {
+          // デバイス選択窓を閉じた（選ばなかった）ときは、何も変わらないのでその旨だけ出す
+          document.getElementById('bleLabel').textContent = '接続を取り消しました（もう一度「UFO SA を再接続」で選べます）';
         }
       }
     }
@@ -493,13 +496,20 @@
     function hideDisconnected() {
       document.getElementById('bleDot').classList.remove('disconnected');
       document.getElementById('reconnectBtn').style.display = 'none';
-      // 「フォルダを読み込む」は这里で消さない：先に再接続だけしたときにも
+      // 「フォルダを読み込む」はここで消さない：先に再接続だけしたときにも
       // フォルダの再読み込みが必要なので、消すのは読み込み成功時だけ。
     }
     document.getElementById('reconnectBtn').addEventListener('click', () => startConnect(false));
 
     function enterMain(deviceName, autoPickFolder = true) {
-      document.getElementById('connect-screen').classList.add('hidden');
+      const scr = document.getElementById('connect-screen');
+      scr.classList.add('hidden');
+      // 接続画面の途中状態（「接続中…」、ボタン無効、connecting クラス、エラー文）を残さない。
+      // 後で再接続のために接続画面が再表示されたとき、古い状態がそのまま見える。
+      scr.classList.remove('connecting');
+      document.getElementById('connectBtn').disabled = false;
+      document.getElementById('connectBtn').textContent = 'UFO SA に接続する';
+      document.getElementById('connectError').textContent = '';
       if (deviceName) {
         hideDisconnected();
         document.getElementById('bleLabel').textContent = deviceName + ' 接続済';
@@ -798,7 +808,7 @@
     });
 
     // File System Access APIでフォルダを再帰的にスキャン
-    async function scanDirHandle(dirHandle, folderName, parentFolderName) {
+    async function scanDirHandle(dirHandle, folderName, parentFolderName, isRescan = false) {
       const files = [], subDirs = [];
       for await (const entry of dirHandle.values()) {
         if (entry.kind === 'file') {
@@ -829,13 +839,19 @@
       // この時点でのfolderNameが最上位か確認して、サブフォルダの親を正しく渡す
       const isTopLevel = !parentFolderName;
       for (const sub of subDirs) {
-        await scanDirHandle(sub.handle, sub.name, isTopLevel ? folderName : parentFolderName);
+        await scanDirHandle(sub.handle, sub.name, isTopLevel ? folderName : parentFolderName, isRescan);
       }
 
-      if (isTopLevel) reportCollisions();
-      // ルートの処理が全部終わったらまとめてメタモーダル表示
-      if (isTopLevel && pendingFolders.length > 0 && currentMetaIndex === 0) {
-        showMetaModal();
+      if (isTopLevel) {
+        // 編集画面から戻ったときの読み直しでは、同じ警告を毎回出さない。
+        // デスク上のファイルを変えていないのに、戻るたびにモーダルが出ると止まっているように見える。
+        if (isRescan) collisionPairs.clear();
+        else reportCollisions();
+        // 同上。読み直しで作品情報モーダルを勝手に開かない（本当に新しい作品が増えた場合は
+        // フォルダ名のまま登録され、「情報を編集」で後から直せる）。
+        if (!isRescan && pendingFolders.length > 0 && currentMetaIndex === 0) {
+          showMetaModal();
+        }
       }
     }
 
@@ -933,8 +949,18 @@
         // 既存フォルダの場合はトラック情報を更新
         library[existingId].tracks = tracks;
         saveLibraryToStorage();
-        if (currentTrack && folderMedia[currentTrack]) loadTrack(currentTrack);
         renderLibrarySidebar();
+        // 読み直した作品が選択中なら、トラック一覧を作り直す。
+        // 放置すると「未読込」表示のまま残り、読み終わったトラックを押しても
+        // 「まだ読み込まれていません」と誤って弾かれる（編集画面から戻った後の Android の
+        // 「＋ フォルダを追加」が、このアプリで唯一の復元経路なので特に必要）。
+        // 再生中のトラックがまだ見つかるなら、一覧を作り直したあとにそれを続ける。
+        if (currentWorkId === existingId) {
+          selectWork(existingId, false);
+          if (currentTrack && folderMedia[currentTrack]) loadTrack(currentTrack);
+          // 編集画面から戻って開けていなかったトラックがあれば、ここで開く
+          if (pendingEditorWorkId === existingId) restorePendingTrack();
+        }
       } else if (mediaBases.length) {
         const workId = 'work_' + Date.now() + '_' + Math.random().toString(36).slice(2);
         library[workId] = { id:workId, folderName, title:folderName, circle:'', cv:'', rj:'', addedAt:Date.now(), plays:0, fav:false, tracks, children:{} };
@@ -1212,7 +1238,9 @@
     // ══════════════════════════════
     let currentWorkId = null, currentTrack = null, trackList = [], currentTrackIndex = 0, isLoopAll = false;
 
-    function selectWork(workId) {
+    // 作品を選ぶ。autoLoad=false のときはトラック一覧を作り直すだけで、先頭トラックを
+    // 再生しない（フォルダを読み直したあとに、開きたいトラック以外を勝手に読ませないため）。
+    function selectWork(workId, autoLoad = true) {
       currentWorkId = workId;
       const w = library[workId];
 
@@ -1253,7 +1281,7 @@
         tracksEl.appendChild(div);
       });
 
-      if (trackList.length) loadTrack(trackList[0]);
+      if (autoLoad && trackList.length) loadTrack(trackList[0]);
     }
 
     // ══════════════════════════════
@@ -1302,7 +1330,7 @@
         hideThumbnail();
       }
 
-      if (csvFiles[base]) loadCSV(csvFiles[base]);
+      if (csvFiles[base]) loadCSV(csvFiles[base], base);
       else { schedule=[]; renderTimeline(); }
     }
 
@@ -1525,9 +1553,13 @@
     });
     if (document.hidden) enableHiddenTicker();
 
-    function loadCSV(file) {
+    function loadCSV(file, base) {
       const reader = new FileReader();
       reader.onload = (e) => {
+        // 読込みは非同期なので、間に別のトラックへ切り替わったら結果を捨てる。
+        // 捨てないと、前のトラックのCSVが後から解決して schedule（BLEの動作とタイムラインの
+        // マーカー）とサムネイルが別のトラックのものになる。
+        if (base && base !== currentTrack) return;
         const lines = e.target.result.replace(/\r/g, '').trim().split('\n').slice(1);
         schedule = lines.map(line => {
           const [time_ms,direction,strength] = line.split(',').map(s=>s.trim());
@@ -1647,6 +1679,13 @@
       const newName = prompt('新しいフォルダ名', w.folderName);
       if (!newName || newName === w.folderName) return;
       if (!rootDirHandle) { alert('フォルダが見つかりません。再読み込みしてください。'); return; }
+      // File System Access APIには親フォルダを取り出す方法がないため、ユーザーが選んだフォルダが
+      // 作品フォルダそのものだと、その中の操作（中に新名を作る・同名の子を消す）になってしまう。
+      // 黙って半端な状態（ライブラリだけが新名を指す）にならないように、ここで止める。
+      if (rootDirHandle.name === w.folderName) {
+        alert('このアプリで選択したフォルダそのものは、ここからリネームできません（ブラウザのAPIに親フォルダの取得が無いため）。ファイルマネージャーで名前を変えたあと、「＋ フォルダを追加」で読み直してください。');
+        return;
+      }
       try {
         const oldHandle = dirHandles[w.folderName];
         const newDirHandle = await rootDirHandle.getDirectoryHandle(newName, { create: true });
@@ -1972,22 +2011,35 @@
           const perm = await rec.dirHandle.queryPermission({ mode: 'readwrite' });
           if (perm === 'granted') { await rescanRestoredFolder(rec.dirHandle); return; }
         } catch(e) { console.warn('保存したフォルダの読み直しに失敗:', e); }
+        // 許可が 'prompt' / 'denied' のときもハンドルは残す。ボタンを押したとき（ユーザー操作）に
+        // requestPermission で取り直せば、同じフォルダを選び直す必要がない。
+        // ここを null にすると、その取り直しは一度も走らず、毎回フォルダ選択窓になる。
+      } else {
+        // レコードが無い／別作品のハンドルなので使わない（D&DやAndroidで追加した作品はここに来る）
+        restoreHandle = null;
       }
-      restoreHandle = null;
-      // 許可が続いていない（またはハンドルが無い）場合は、ワンクリックでフォルダを選ぶ
+      // 自動では読み直せないので、ワンクリックでフォルダを選ぶボタンを出す
       showFolderBtn();
     }
 
     // 作品フォルダを読み直し、トラック一覧・編集CSV・選んでいたトラックまで復元する
     async function rescanRestoredFolder(dirHandle) {
-      await scanDirHandle(dirHandle, dirHandle.name, null);
+      await scanDirHandle(dirHandle, dirHandle.name, null, true);   // 読み直しでは同じ警告を繰り返さない
       rootDirHandle = dirHandle;   // 「＋フォルダを追加」と同じ状態にして、フォルダのリネーム・削除を使えるようにする
       applyAllCsvEdits();          // スキャンでディスクのCSVが読まれた後に編集内容を上書きし直す
       // トラック一覧はスキャン前に作っているので、読み込みが終わった時点で作り直す。
       // 作り直さないと「未読込」表示のまま残り、読み終わったトラックを押しても
       // 「まだ読み込まれていません」と誤って弾される。CSVバッジの表示も正しくなる。
-      if (pendingEditorWorkId && library[pendingEditorWorkId]) selectWork(pendingEditorWorkId);
+      // autoLoad=false: 一覧だけ作り直す。先頭トラックを勝手に読むと、そのCSV読み込みが
+      // 後から解決して、開くはずのトラックの schedule（BLEの動作・マーカー）が別のものになる。
+      // 復元中にユーザーが別作品を選んでいた場合は、その選択を元に戻さない。
+      if (pendingEditorWorkId && currentWorkId === pendingEditorWorkId && library[pendingEditorWorkId]) {
+        selectWork(pendingEditorWorkId, false);
+      }
       restorePendingTrack();
+      // 復元はここで終わり。待ち状態とハンドルを残したままだと、後に「＋ フォルダを追加」で
+      // 同じ作品を読み直したとき、古いトラックを勝手に開いて選択を書き換えてしまう。
+      pendingEditorTrack = null; pendingEditorWorkId = null; restoreHandle = null;
     }
 
     function restorePendingTrack() {
